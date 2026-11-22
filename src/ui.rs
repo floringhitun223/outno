@@ -1,12 +1,35 @@
-//! Classic Inno Setup look: grey wizard body, white header strip, flat buttons,
-//! Back / Next / Cancel footer, dark-blue banner on the Welcome / Finish pages.
+//! OUTNO look & feel, shared by the compiler, the setup wizard and the uninstaller.
+//!
+//! Light, Windows 11-flavoured theme: soft grey canvas, white cards, rounded
+//! inputs with a blue focus ring, a branded header and a Back / Next / Cancel
+//! footer. On Windows the system Segoe UI font is used when it is available.
 
-use eframe::egui::{self, Color32, Frame, Margin, RichText, Rounding, Stroke};
+use eframe::egui::{
+    self, Color32, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Rounding, Stroke,
+    TextureHandle, TextureOptions, Vec2,
+};
+use std::sync::Arc;
 
-pub const GRAY: Color32 = Color32::from_rgb(240, 240, 240);
-pub const BANNER: Color32 = Color32::from_rgb(0, 51, 102);
-const BORDER: Color32 = Color32::from_rgb(173, 173, 173);
-const BLUE: Color32 = Color32::from_rgb(0, 120, 215);
+// ── Brand palette (taken from the OUTNO icon) ────────────────────────────────
+pub const ACCENT: Color32 = Color32::from_rgb(10, 100, 214);
+pub const ACCENT_PRESS: Color32 = Color32::from_rgb(6, 70, 160);
+pub const BANNER_TOP: Color32 = Color32::from_rgb(20, 120, 232);
+pub const BANNER_BOTTOM: Color32 = Color32::from_rgb(8, 52, 140);
+pub const BG: Color32 = Color32::from_rgb(243, 244, 246);
+pub const CARD: Color32 = Color32::WHITE;
+pub const BORDER: Color32 = Color32::from_rgb(218, 221, 227);
+pub const TEXT: Color32 = Color32::from_rgb(31, 35, 40);
+pub const MUTED: Color32 = Color32::from_rgb(95, 102, 114);
+pub const ERROR: Color32 = Color32::from_rgb(196, 43, 28);
+pub const SUCCESS: Color32 = Color32::from_rgb(16, 124, 16);
+
+pub const BRAND: &str = "OUTNO";
+pub const TAGLINE: &str = "Lightweight setup creator";
+
+/// 256 px icon, embedded so every generated setup / uninstaller carries it.
+const ICON_PNG: &[u8] = include_bytes!("../assets/outno-256.png");
+
+const BOLD: &str = "bold";
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum Nav {
@@ -16,66 +39,233 @@ pub enum Nav {
     Cancel,
 }
 
-pub fn window_options(title: &str, size: [f32; 2]) -> eframe::NativeOptions {
-    eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_inner_size(size)
-            .with_resizable(false)
-            .with_maximize_button(false),
-        centered: true,
-        ..Default::default()
+/// Brand assets that need a live egui context (textures).
+#[derive(Clone)]
+pub struct Brand {
+    pub icon: TextureHandle,
+}
+
+impl Brand {
+    pub fn image(&self, size: f32) -> egui::Image<'static> {
+        egui::Image::from_texture((self.icon.id(), Vec2::splat(size))).fit_to_exact_size(Vec2::splat(size))
     }
 }
 
-pub fn apply_classic(ctx: &egui::Context) {
-    let mut v = egui::Visuals::light();
-    v.panel_fill = GRAY;
-    v.window_fill = GRAY;
-    v.window_rounding = Rounding::ZERO;
-    v.window_stroke = Stroke::new(1.0, BORDER);
-    for w in [
-        &mut v.widgets.noninteractive,
-        &mut v.widgets.inactive,
-        &mut v.widgets.hovered,
-        &mut v.widgets.active,
-        &mut v.widgets.open,
-    ] {
-        w.rounding = Rounding::ZERO;
+fn icon_data() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(ICON_PNG).unwrap_or_default()
+}
+
+pub fn window_options(title: &str, size: [f32; 2], resizable: bool) -> eframe::NativeOptions {
+    let mut vp = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_app_id("outno")
+        .with_icon(Arc::new(icon_data()))
+        .with_inner_size(size)
+        .with_resizable(resizable)
+        .with_maximize_button(resizable)
+        .with_drag_and_drop(true);
+    if resizable {
+        vp = vp.with_min_inner_size([size[0] * 0.85, size[1] * 0.8]);
     }
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(225, 225, 225);
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(229, 241, 251);
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, BLUE);
-    v.widgets.active.weak_bg_fill = Color32::from_rgb(204, 228, 247);
-    v.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0, 84, 153));
-    v.selection.bg_fill = BLUE;
+    eframe::NativeOptions { viewport: vp, centered: true, ..Default::default() }
+}
+
+/// Install fonts + theme and upload the brand texture. Call once from the app creator.
+pub fn setup(ctx: &egui::Context) -> Brand {
+    install_fonts(ctx);
+    apply_theme(ctx);
+    let icon = icon_data();
+    let img = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
+    Brand { icon: ctx.load_texture("outno-icon", img, TextureOptions::LINEAR) }
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    let default_prop = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+
+    let read = |name: &str| -> Option<Vec<u8>> {
+        let windir = std::env::var_os("WINDIR")?;
+        std::fs::read(std::path::Path::new(&windir).join("Fonts").join(name)).ok()
+    };
+
+    let mut bold_family = default_prop.clone();
+    if let Some(regular) = read("segoeui.ttf") {
+        fonts.font_data.insert("segoe".into(), FontData::from_owned(regular));
+        if let Some(p) = fonts.families.get_mut(&FontFamily::Proportional) {
+            p.insert(0, "segoe".into());
+        }
+        bold_family.insert(0, "segoe".into());
+    }
+    if let Some(semi) = read("seguisb.ttf").or_else(|| read("segoeuib.ttf")) {
+        fonts.font_data.insert("segoe-semibold".into(), FontData::from_owned(semi));
+        bold_family.insert(0, "segoe-semibold".into());
+    }
+    // The family must always exist, otherwise egui panics when it is used.
+    fonts.families.insert(FontFamily::Name(BOLD.into()), bold_family);
+    ctx.set_fonts(fonts);
+}
+
+fn apply_theme(ctx: &egui::Context) {
+    let mut v = egui::Visuals::light();
+    v.override_text_color = Some(TEXT);
+    v.panel_fill = BG;
+    v.window_fill = CARD;
+    v.window_rounding = Rounding::same(10.0);
+    v.window_stroke = Stroke::new(1.0_f32, BORDER);
+    v.window_shadow = egui::epaint::Shadow {
+        offset: egui::vec2(0.0, 8.0),
+        blur: 24.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(40),
+    };
+    v.popup_shadow = egui::epaint::Shadow {
+        offset: egui::vec2(0.0, 4.0),
+        blur: 12.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(30),
+    };
+    v.menu_rounding = Rounding::same(6.0);
+    v.extreme_bg_color = Color32::WHITE; // text-edit background
+    v.faint_bg_color = Color32::from_rgb(248, 249, 250);
+    v.hyperlink_color = ACCENT;
+    v.selection.bg_fill = Color32::from_rgb(204, 226, 252);
+    v.selection.stroke = Stroke::new(1.5_f32, ACCENT); // focus ring on text edits
+    v.text_cursor.stroke = Stroke::new(1.5_f32, ACCENT);
+
+    let r = Rounding::same(5.0);
+    v.widgets.noninteractive.rounding = r;
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+
+    v.widgets.inactive.rounding = r;
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(251, 251, 252);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(236, 238, 241);
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(200, 204, 211));
+    v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+
+    v.widgets.hovered.rounding = r;
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(240, 245, 252);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(225, 236, 250);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(120, 160, 220));
+    v.widgets.hovered.fg_stroke = Stroke::new(1.5_f32, TEXT);
+    v.widgets.hovered.expansion = 0.0;
+
+    v.widgets.active.rounding = r;
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(220, 232, 248);
+    v.widgets.active.bg_fill = Color32::from_rgb(210, 226, 248);
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    v.widgets.active.fg_stroke = Stroke::new(1.5_f32, TEXT);
+    v.widgets.active.expansion = 0.0;
+
+    v.widgets.open = v.widgets.active;
     ctx.set_visuals(v);
 
-    let mut style = (*ctx.style()).clone();
-    style.spacing.button_padding = egui::vec2(14.0, 4.0);
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    ctx.set_style(style);
+    ctx.style_mut(|s| {
+        s.spacing.button_padding = egui::vec2(12.0, 5.0);
+        s.spacing.item_spacing = egui::vec2(8.0, 7.0);
+        s.spacing.interact_size.y = 26.0;
+        s.spacing.icon_width = 16.0;
+        s.spacing.icon_width_inner = 9.0;
+        s.spacing.scroll = egui::style::ScrollStyle::thin();
+        s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
+        s.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+        s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
+        s.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(12.5));
+    });
 }
 
-fn button(text: &str) -> egui::Button<'_> {
-    egui::Button::new(text).min_size(egui::vec2(80.0, 26.0))
+// ── Small building blocks ────────────────────────────────────────────────────
+
+/// Heading text in the semibold family (falls back to the regular font).
+pub fn bold(text: impl Into<String>, size: f32) -> RichText {
+    RichText::new(text).family(FontFamily::Name(BOLD.into())).size(size)
 }
 
-/// White strip with bold title + subtitle (Inno's wizard page header).
-pub fn header(ctx: &egui::Context, title: &str, subtitle: &str) {
+pub fn muted(text: impl Into<String>) -> RichText {
+    RichText::new(text).color(MUTED)
+}
+
+pub fn button(text: impl Into<String>) -> egui::Button<'static> {
+    egui::Button::new(text.into()).min_size(egui::vec2(88.0, 30.0))
+}
+
+/// Filled accent button for the main action of a screen.
+pub fn primary_button(text: impl Into<String>) -> egui::Button<'static> {
+    egui::Button::new(bold(text, 14.0).color(Color32::WHITE))
+        .fill(ACCENT)
+        .stroke(Stroke::new(1.0_f32, ACCENT_PRESS))
+        .min_size(egui::vec2(96.0, 30.0))
+}
+
+/// White rounded card with a title, used to group form sections.
+pub fn card<R>(ui: &mut egui::Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    Frame::none()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .rounding(Rounding::same(8.0))
+        .inner_margin(Margin::symmetric(16.0, 14.0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(bold(title, 15.0));
+            if !subtitle.is_empty() {
+                ui.label(muted(subtitle).size(12.5));
+            }
+            ui.add_space(6.0);
+            add(ui)
+        })
+        .inner
+}
+
+/// White box with a thin border (license text, summaries, logs).
+pub fn inset_frame() -> Frame {
+    Frame::none()
+        .fill(Color32::WHITE)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .rounding(Rounding::same(6.0))
+        .inner_margin(Margin::same(10.0))
+}
+
+fn vgradient(p: &egui::Painter, r: egui::Rect, top: Color32, bottom: Color32) {
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(r.left_top(), top);
+    m.colored_vertex(r.right_top(), top);
+    m.colored_vertex(r.left_bottom(), bottom);
+    m.colored_vertex(r.right_bottom(), bottom);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(1, 3, 2);
+    p.add(m);
+}
+
+// ── Wizard chrome ────────────────────────────────────────────────────────────
+
+/// White page header: bold title, subtitle and the OUTNO icon on the right.
+pub fn header(ctx: &egui::Context, brand: &Brand, title: &str, subtitle: &str) {
     egui::TopBottomPanel::top("header")
-        .exact_height(60.0)
-        .frame(Frame::none().fill(Color32::WHITE).inner_margin(Margin::symmetric(18.0, 10.0)))
+        .exact_height(66.0)
+        .frame(
+            Frame::none()
+                .fill(Color32::WHITE)
+                .inner_margin(Margin { left: 22.0, right: 16.0, top: 10.0, bottom: 10.0 })
+                .stroke(Stroke::new(1.0_f32, BORDER)),
+        )
         .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(RichText::new(title).strong().size(15.0));
-            ui.label(format!("   {subtitle}"));
+            ui.horizontal_centered(|ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.add_space(2.0);
+                    ui.label(bold(title, 16.0));
+                    ui.label(muted(subtitle).size(13.0));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(brand.image(44.0));
+                });
+            });
         });
 }
 
-/// Bottom button bar:  [< Back] [Next >]   [Cancel]
+/// Bottom bar:  OUTNO            [< Back] [Next >]  [Cancel]
 /// `back` / `cancel`: None = hidden, Some(enabled).
+/// Enter activates Next, Escape activates Cancel.
 pub fn footer(
     ctx: &egui::Context,
     back: Option<bool>,
@@ -85,44 +275,113 @@ pub fn footer(
 ) -> Nav {
     let mut nav = Nav::None;
     egui::TopBottomPanel::bottom("footer")
-        .exact_height(50.0)
-        .frame(Frame::none().fill(GRAY).inner_margin(Margin::symmetric(14.0, 11.0)))
+        .exact_height(56.0)
+        .frame(Frame::none().fill(BG).inner_margin(Margin::symmetric(16.0, 12.0)).stroke(Stroke::new(1.0_f32, BORDER)))
         .show(ctx, |ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(en) = cancel {
-                    if ui.add_enabled(en, button("Cancel")).clicked() {
-                        nav = Nav::Cancel;
+            ui.horizontal_centered(|ui| {
+                ui.label(bold(BRAND, 12.0).color(Color32::from_rgb(150, 156, 166)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(en) = cancel {
+                        if ui.add_enabled(en, button("Cancel")).clicked() {
+                            nav = Nav::Cancel;
+                        }
+                        ui.add_space(8.0);
                     }
-                    ui.add_space(10.0);
-                }
-                if ui.add_enabled(next_enabled, button(next_label)).clicked() {
-                    nav = Nav::Next;
-                }
-                if let Some(en) = back {
-                    if ui.add_enabled(en, button("< Back")).clicked() {
-                        nav = Nav::Back;
+                    if ui.add_enabled(next_enabled, primary_button(next_label)).clicked() {
+                        nav = Nav::Next;
                     }
-                }
+                    if let Some(en) = back {
+                        if ui.add_enabled(en, button("< Back")).clicked() {
+                            nav = Nav::Back;
+                        }
+                    }
+                });
             });
         });
+
+    if nav == Nav::None {
+        let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        if enter && next_enabled {
+            nav = Nav::Next;
+        } else if esc && cancel == Some(true) {
+            nav = Nav::Cancel;
+        }
+    }
     nav
 }
 
-/// Dark-blue side banner for the Welcome / Finished pages.
-pub fn side_banner(ctx: &egui::Context, app_name: &str) {
+/// Blue gradient side banner for the Welcome / Finished pages.
+pub fn side_banner(ctx: &egui::Context, brand: &Brand, app_name: &str, version: &str) {
     egui::SidePanel::left("banner")
-        .exact_width(164.0)
+        .exact_width(172.0)
         .resizable(false)
-        .frame(Frame::none().fill(BANNER).inner_margin(Margin::same(12.0)))
+        .show_separator_line(false)
+        .frame(Frame::none())
         .show(ctx, |ui| {
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                let initial = app_name.chars().next().unwrap_or('S').to_uppercase().to_string();
-                ui.label(RichText::new(initial).size(64.0).strong().color(Color32::WHITE));
-                ui.add_space(8.0);
-                ui.label(RichText::new(app_name).size(16.0).color(Color32::from_rgb(200, 220, 245)));
+            let rect = ui.max_rect();
+            vgradient(ui.painter(), rect, BANNER_TOP, BANNER_BOTTOM);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink(14.0)), |ui| {
+                ui.add_space(46.0);
+                ui.vertical_centered(|ui| {
+                    ui.add(brand.image(104.0));
+                    ui.add_space(14.0);
+                    ui.label(bold(app_name, 17.0).color(Color32::WHITE));
+                    if !version.is_empty() {
+                        ui.label(RichText::new(format!("Version {version}")).size(12.5).color(Color32::from_rgb(200, 222, 250)));
+                    }
+                });
             });
         });
+}
+
+/// Dims the window and swallows clicks so a dialog on top behaves modally.
+pub fn modal_backdrop(ctx: &egui::Context) {
+    egui::Area::new(egui::Id::new("modal-backdrop"))
+        .order(egui::Order::PanelResizeLine)
+        .fixed_pos(egui::Pos2::ZERO)
+        .show(ctx, |ui| {
+            let r = ctx.screen_rect();
+            ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(70));
+            ui.allocate_rect(r, egui::Sense::click_and_drag());
+        });
+}
+
+/// Centered yes/no dialog. Returns Some(true) for Yes, Some(false) for No.
+pub fn confirm_dialog(ctx: &egui::Context, title: &str, lines: &[&str], yes: &str, no: &str) -> Option<bool> {
+    modal_backdrop(ctx);
+    let mut answer = None;
+    egui::Window::new(title)
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(false)
+        .fixed_size([340.0, 0.0])
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .frame(Frame::window(&ctx.style()).inner_margin(Margin::same(18.0)))
+        .show(ctx, |ui| {
+            ui.label(bold(title, 15.0));
+            ui.add_space(6.0);
+            for l in lines {
+                ui.label(*l);
+            }
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(button(no)).clicked() {
+                    answer = Some(false);
+                }
+                if ui.add(primary_button(yes)).clicked() {
+                    answer = Some(true);
+                }
+            });
+        });
+    if answer.is_none() {
+        let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        if enter {
+            answer = Some(true);
+        } else if esc {
+            answer = Some(false);
+        }
+    }
+    answer
 }
 
 pub fn fmt_size(bytes: u64) -> String {

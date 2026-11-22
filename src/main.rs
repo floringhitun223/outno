@@ -1,10 +1,18 @@
 // Hide the console window on Windows.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+//! OUTNO — lightweight setup creator.
+//!
+//! One executable, three roles:
+//!   * compiler     — no payload attached: the OUTNO window (or `--build` from the command line)
+//!   * installer    — a payload is appended: the setup wizard
+//!   * uninstaller  — started as `unins000.exe --uninstall "<dir>"`
+
 mod builder;
 mod installer;
 mod payload;
 mod platform;
+mod taskbar;
 mod ui;
 
 use std::path::PathBuf;
@@ -25,6 +33,30 @@ fn main() -> eframe::Result<()> {
         }
     }
 
-    // 3) Otherwise we are the compiler (the "Inno Setup Compiler" part).
-    builder::run()
+    // 3) Headless build:  outno --build project.outno
+    if let Some(i) = args.iter().position(|a| a == "--build") {
+        platform::attach_parent_console();
+        let Some(project) = args.get(i + 1) else {
+            eprintln!("usage: outno --build <project.{}>", builder::PROJECT_EXT);
+            std::process::exit(2);
+        };
+        match builder::build_cli(&PathBuf::from(project)) {
+            Ok(p) => {
+                println!("Setup written to {}", p.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Build failed:\n{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // 4) Compiler window, optionally opening a project passed as the first argument.
+    let project = args
+        .iter()
+        .skip(1)
+        .find(|a| a.to_lowercase().ends_with(&format!(".{}", builder::PROJECT_EXT)))
+        .map(PathBuf::from);
+    builder::run(project)
 }

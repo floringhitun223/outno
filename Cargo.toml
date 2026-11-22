@@ -1,8 +1,11 @@
 [package]
-name = "rusty-setup"
-version = "0.1.0"
+name = "outno"
+version = "0.2.0"
 edition = "2021"
-description = "An Inno Setup style installer builder and wizard, written in Rust"
+description = "OUTNO - lightweight setup creator for Windows apps, written in Rust"
+license = "MIT"
+repository = "https://github.com/floringhitun223/outno"
+build = "build.rs"
 
 [dependencies]
 eframe = "0.29"
@@ -12,6 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
 dirs = "5"
+raw-window-handle = "0.6"
+
+[build-dependencies]
+winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 mslnk = "0.1"

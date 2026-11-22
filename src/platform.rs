@@ -111,3 +111,33 @@ pub fn open_folder(path: &Path) {
     #[cfg(all(not(windows), not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
+
+/// Open Explorer with the file selected (falls back to opening its folder).
+pub fn reveal_file(path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    if let Some(parent) = path.parent() {
+        open_folder(parent);
+    }
+}
+
+/// GUI-subsystem exes have no console; attach to the parent's so CLI output is visible.
+#[cfg(windows)]
+pub fn attach_parent_console() {
+    extern "system" {
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn attach_parent_console() {}
