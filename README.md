@@ -1,5 +1,6 @@
-
-![OUTNO application icon](assets/outno-icon.png)
+<div align="center">
+  <img src="assets/outno-icon.png" alt="OUTNO" width="180">
+</div>
 
 # OUTNO
 
