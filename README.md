@@ -1,4 +1,4 @@
-::: {align="center"}
+
 # OUTNO
 
 ### Build. Package. Install.
