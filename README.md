@@ -1,154 +1,168 @@
+<div align="center">
+
 # OUTNO
 
-**Build. Package. Install.**
+### Build. Package. Install.
 
-OUTNO is a Rust-powered Windows application packaging and installer-building tool. It is designed to turn an application folder into a distributable Windows setup executable, with an installation experience inspired by the classic Inno Setup workflow.
+**A Rust-powered Windows application installer builder.**
 
-> **Project status:** This README describes the functionality documented in the current project. Items under **Roadmap** are planned ideas, not features claimed to be implemented.
+Create self-contained Windows setup executables from your application files, with a familiar installation wizard and an accompanying uninstaller.
+
+[![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)](https://www.microsoft.com/windows)
+[![Status](https://img.shields.io/badge/Status-Early%20development-orange)](#project-status)
+[![License](https://img.shields.io/badge/License-TBD-lightgrey)](#license)
+
+**[Releases](https://github.com/OWNER/REPOSITORY/releases) · [Report a bug](https://github.com/OWNER/REPOSITORY/issues) · [Request a feature](https://github.com/OWNER/REPOSITORY/issues)**
+
+</div>
+
+---
 
 ## Overview
 
-OUTNO currently uses one executable for three operating modes:
+OUTNO is a Windows installer creation tool written in Rust. It takes an application directory and packages its files into a standalone setup executable.
 
-| Mode | How it starts | What it does |
-|---|---|---|
-| **Compiler** | Run the application normally | Opens the compiler form to configure and build an installer. |
-| **Installer** | Run a generated `setup.exe` containing an embedded payload | Opens the installation wizard: Welcome, License, Destination, Tasks, Ready, Installing and Finish. |
-| **Uninstaller** | Run `unins000.exe --uninstall "<dir>"` | Requests confirmation and removes the installed application. |
+The generated installer contains the application payload and the installer runtime in one executable. When launched, it presents an installation wizard, extracts the application and creates the selected shortcuts. An uninstaller is also installed alongside the application.
 
-## Current capabilities
+OUTNO is being developed as an independent, modern alternative to traditional Windows installer-building workflows.
 
-### Installer compiler
+> **Project status:** OUTNO is in early development. The features below describe the functionality currently documented in the project; the roadmap contains ideas that are not yet implemented.
 
-The compiler form lets you configure:
+## Features
 
-- Application name and version
-- Source application folder
-- Main executable
-- Optional `.txt` license file
-- Desktop and Start Menu shortcut options
-- Installer output location
+- **Self-contained setup executable** — the generated installer carries the application archive and its metadata.
+- **Graphical installer wizard** — Welcome, License, Destination, Tasks, Ready, Installing and Finish stages.
+- **Per-user installation by default** — installs under `%LOCALAPPDATA%\Programs` without requiring administrator privileges.
+- **Application shortcuts** — creates Desktop and Start Menu shortcuts.
+- **Uninstaller generation** — writes an uninstaller executable and its data file into the installation directory.
+- **Windows app registration** — adds an Add/Remove Programs entry for the current user.
+- **Path traversal protection** — blocks archive paths that attempt to escape the installation directory.
+- **Rust implementation** — a native Windows application built with Rust.
 
-The application name and main executable are auto-detected after selecting the application folder. The generated installer is saved using this naming pattern:
+## How it works
 
-```text
-Output/<App>-setup-<version>.exe
-```
+OUTNO currently uses three operating modes:
 
-### Generated installation wizard
+| Mode | Purpose |
+|---|---|
+| **Compiler** | Select the application folder and configure the installer. |
+| **Installer** | Run the generated setup executable and install the packaged application. |
+| **Uninstaller** | Confirm and remove an installed application. |
 
-A generated setup executable contains the installer program and the application payload. When launched, it detects the embedded payload and starts the wizard.
-
-The documented wizard flow is:
-
-1. Welcome
-2. License
-3. Destination
-4. Tasks
-5. Ready
-6. Installing
-7. Finish
-
-### Installation behavior
-
-The current installer:
-
-- Installs per-user by default, without requiring administrator privileges.
-- Uses `%LOCALAPPDATA%\Programs\<App>` as the default installation directory.
-- Can create Desktop and Start Menu `.lnk` shortcuts.
-- Writes `unins000.exe` and `unins000.dat` for uninstall support.
-- Creates an Add/Remove Programs entry under `HKCU`.
-- Blocks `../` path traversal while extracting application files.
-
-### Embedded installer format
-
-The current generated setup format appends the application payload and metadata to the installer executable:
+The generated setup file uses an appended-payload format:
 
 ```text
 [installer executable]
-[ZIP archive of the application]
+[application ZIP archive]
 [manifest.json]
-[ZIP archive length]
+[ZIP length]
 [manifest length]
 ["RSINST01"]
 ```
 
-At startup, the executable checks for the trailer marker. If the marker and payload are present, it switches from compiler mode to installer mode and extracts the application archive from its own executable file.
+At startup, the executable checks for the payload trailer. If it is present, it starts the installation wizard and extracts the application archive.
 
-## Build from source
+## Getting started
 
 ### Requirements
 
-- Rust toolchain (`rustup` and `cargo`)
-- Windows MSVC build tools for the `x86_64-pc-windows-msvc` target when building for 64-bit Windows
+- Windows
+- [Rust](https://www.rust-lang.org/tools/install) and Cargo
+- The MSVC build tools for the `x86_64-pc-windows-msvc` target
 
-Add the Windows target if it is not already installed:
+### Build from source
+
+If you are building on Windows and the MSVC target is not installed, add it first:
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
 ```
 
-Build an optimized release:
+Build the project in release mode:
 
 ```powershell
 cargo build --release
 ```
 
-The current project README identifies the resulting executable as:
+Run the resulting executable from the project directory:
 
-```text
-target\release\rusty-setup.exe
+```powershell
+.\target\release\outno.exe
 ```
 
-> **Binary naming note:** The product documentation is branded OUTNO, but the existing build artifact is still named `rusty-setup.exe`. Rename the Cargo package/binary configuration separately if you want the compiled executable itself to be named `outno.exe`.
+> **Note:** The current source may still produce the legacy `rusty-setup.exe` binary name until the Cargo package and binary are renamed to OUTNO.
 
-## Use OUTNO
+## Creating an installer
 
-1. Launch the compiler application.
-2. Click **Browse** next to **Application folder** and select the folder containing the application you want to distribute.
-3. Check the detected application name and main executable.
+1. Launch the OUTNO compiler.
+2. Browse to the **Application folder** containing the files you want to distribute.
+3. Review the detected application name and main executable.
 4. Optionally select a `.txt` license file.
-5. Configure Desktop and Start Menu shortcuts.
-6. Choose the output folder.
-7. Click **Build installer**.
-8. Distribute the generated setup executable.
+5. Configure the shortcut options and output folder.
+6. Select **Build installer**.
+7. Find the generated setup executable in the selected output directory.
 
-The recipient runs the setup executable and follows the installation wizard. The installed application includes an uninstaller generated by the installer process.
+The output filename follows this pattern:
 
-## Project design
+```text
+<App>-setup-<version>.exe
+```
 
-OUTNO is intended to provide a straightforward, self-contained workflow:
+## Installation behavior
 
-- **Build-time configuration:** choose the application files and installer options in the compiler.
-- **Payload packaging:** archive the application and append its data and manifest to the installer executable.
-- **Runtime detection:** identify a generated installer by checking its appended trailer.
-- **Installation:** display the wizard and extract the application to the selected destination.
-- **Removal:** provide an uninstaller and an Add/Remove Programs entry.
+The currently documented installer behavior is:
 
-The current format uses the `RSINST01` trailer marker. This is an implementation detail of the current format and can be revised as the project evolves.
+- Installs per-user by default to `%LOCALAPPDATA%\Programs\<App>`.
+- Creates Desktop and Start Menu `.lnk` shortcuts.
+- Writes `unins000.exe` and `unins000.dat` into the installation directory.
+- Creates an Add/Remove Programs entry under `HKCU`.
+- Blocks `../` path traversal during archive extraction.
 
-## Security notes
-
-The current implementation documents a path-traversal check that blocks archive entries containing `../` during extraction. This is an important baseline safeguard, but it should not be interpreted as a complete security audit of the installer or its archive-handling code.
-
-Before using OUTNO to distribute production software, test generated installers and uninstallers with representative applications, unusual file names, interrupted installations, and different Windows user environments. Code-signing the final executable is also recommended for a production release.
+An all-users installation mode and additional installer customization are planned, not currently documented as implemented.
 
 ## Roadmap
 
-The following are ideas for future development; they are **not represented as implemented features** in the current project description:
+Potential next steps for OUTNO include:
 
-- Embed a custom application icon and Windows UAC manifest using the `winres` crate.
-- Offer an all-users installation mode targeting `Program Files` with the required elevation flow.
-- Add installer language packs.
-- Support custom wizard images and richer license rendering, including `.rtf`.
-- Save and load compiler projects, similar to Inno Setup `.iss` scripts.
-- Add code-signing support or a guided signing workflow.
-- Expand compiler options and installer customization while keeping the build workflow approachable.
+- [ ] Embed an application icon and Windows UAC manifest.
+- [ ] Add an all-users installation option targeting `Program Files`.
+- [ ] Add installer language packs.
+- [ ] Support custom wizard images.
+- [ ] Render rich-text (`.rtf`) license files.
+- [ ] Save and load compiler projects.
+- [ ] Introduce a script-based project format.
+- [ ] Support code-signing workflows for generated installers.
 
-## Name and positioning
+The roadmap is subject to change as development progresses.
 
-**OUTNO** is the product name. It is intentionally short and not tied to a forced acronym, so the product can grow beyond its initial installer-building functionality.
+## Contributing
 
-**Tagline:** Build. Package. Install.
+Contributions, bug reports and feature suggestions are welcome.
 
-**Product description:** A Windows application packaging and installer-building tool written in Rust.
+Before opening a pull request:
+
+1. Check existing issues to avoid duplicate reports.
+2. Describe the problem or proposed change clearly.
+3. Include reproduction steps for bug fixes where possible.
+4. Keep changes focused and document user-facing behavior.
+
+Use the repository's **Issues** page for bug reports and feature requests.
+
+## Security
+
+Installer software handles executable files, archives and filesystem operations. Please report suspected security vulnerabilities privately to the project maintainer rather than publishing exploit details in a public issue.
+
+Do not use OUTNO to package software you do not have permission to distribute.
+
+## License
+
+The project license has not yet been specified. Until a license is added to the repository, all rights are reserved by the copyright holder. Do not assume the project is open source or that its code may be redistributed.
+
+---
+
+<div align="center">
+
+**OUTNO** · Build. Package. Install.
+
+</div>
