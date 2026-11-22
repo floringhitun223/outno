@@ -206,6 +206,6 @@ OUTNO is licensed under the [MIT License](LICENSE).
 
 ------------------------------------------------------------------------
 
-::: {align="center"}
+
 **OUTNO** · Build. Package. Install.
 :::
