@@ -1,4 +1,4 @@
-::: {align="center"}
+
 ![OUTNO application icon](assets/outno-icon.png)
 
 # OUTNO
@@ -208,6 +208,6 @@ OUTNO is licensed under the [MIT License](LICENSE).
 
 ------------------------------------------------------------------------
 
-::: {align="center"}
+
 **OUTNO** · Build. Package. Install.
 :::
