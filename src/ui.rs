@@ -8,13 +8,39 @@ use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Rounding, Stroke,
     TextureHandle, TextureOptions, Vec2,
 };
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+/// Accent colour (0xRRGGBB). Setups can override it from their manifest.
+static ACCENT_RGB: AtomicU32 = AtomicU32::new(0x0A64D6);
+
+/// Change the accent colour. Call before `setup` so the theme picks it up.
+pub fn set_accent(rgb: [u8; 3]) {
+    ACCENT_RGB.store(u32::from_be_bytes([0, rgb[0], rgb[1], rgb[2]]), Ordering::Relaxed);
+}
+
+fn mix(c: Color32, target: u8, t: f32) -> Color32 {
+    let m = |v: u8| (v as f32 + (target as f32 - v as f32) * t).round() as u8;
+    Color32::from_rgb(m(c.r()), m(c.g()), m(c.b()))
+}
+
+pub fn accent() -> Color32 {
+    let [_, r, g, b] = ACCENT_RGB.load(Ordering::Relaxed).to_be_bytes();
+    Color32::from_rgb(r, g, b)
+}
+/// Darker accent for pressed states and button borders.
+pub fn accent_press() -> Color32 {
+    mix(accent(), 0, 0.3)
+}
+pub fn banner_top() -> Color32 {
+    mix(accent(), 255, 0.1)
+}
+pub fn banner_bottom() -> Color32 {
+    mix(accent(), 0, 0.45)
+}
+
 // ── Brand palette (taken from the OUTNO icon) ────────────────────────────────
-pub const ACCENT: Color32 = Color32::from_rgb(10, 100, 214);
-pub const ACCENT_PRESS: Color32 = Color32::from_rgb(6, 70, 160);
-pub const BANNER_TOP: Color32 = Color32::from_rgb(20, 120, 232);
-pub const BANNER_BOTTOM: Color32 = Color32::from_rgb(8, 52, 140);
+pub const DEFAULT_ACCENT: [u8; 3] = [10, 100, 214];
 pub const BG: Color32 = Color32::from_rgb(243, 244, 246);
 pub const CARD: Color32 = Color32::WHITE;
 pub const BORDER: Color32 = Color32::from_rgb(218, 221, 227);
@@ -43,12 +69,30 @@ pub enum Nav {
 #[derive(Clone)]
 pub struct Brand {
     pub icon: TextureHandle,
+    /// Custom side-banner image for the Welcome / Finished pages.
+    pub wizard: Option<TextureHandle>,
+    /// Custom image in the top-right corner of the page header.
+    pub header: Option<TextureHandle>,
 }
 
 impl Brand {
     pub fn image(&self, size: f32) -> egui::Image<'static> {
         egui::Image::from_texture((self.icon.id(), Vec2::splat(size))).fit_to_exact_size(Vec2::splat(size))
     }
+}
+
+/// Decode a PNG into a texture.
+pub fn load_png(ctx: &egui::Context, name: &str, png: &[u8]) -> Option<TextureHandle> {
+    let d = eframe::icon_data::from_png_bytes(png).ok()?;
+    let img = egui::ColorImage::from_rgba_unmultiplied([d.width as usize, d.height as usize], &d.rgba);
+    Some(ctx.load_texture(name, img, TextureOptions::LINEAR))
+}
+
+/// Largest size with the texture's aspect ratio that fits in `max`.
+fn fit(tex: &TextureHandle, max: Vec2) -> Vec2 {
+    let s = tex.size_vec2();
+    let k = (max.x / s.x).min(max.y / s.y);
+    s * k
 }
 
 fn icon_data() -> egui::IconData {
@@ -76,7 +120,7 @@ pub fn setup(ctx: &egui::Context) -> Brand {
     apply_theme(ctx);
     let icon = icon_data();
     let img = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
-    Brand { icon: ctx.load_texture("outno-icon", img, TextureOptions::LINEAR) }
+    Brand { icon: ctx.load_texture("outno-icon", img, TextureOptions::LINEAR), wizard: None, header: None }
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -127,10 +171,10 @@ fn apply_theme(ctx: &egui::Context) {
     v.menu_rounding = Rounding::same(6.0);
     v.extreme_bg_color = Color32::WHITE; // text-edit background
     v.faint_bg_color = Color32::from_rgb(248, 249, 250);
-    v.hyperlink_color = ACCENT;
+    v.hyperlink_color = accent();
     v.selection.bg_fill = Color32::from_rgb(204, 226, 252);
-    v.selection.stroke = Stroke::new(1.5_f32, ACCENT); // focus ring on text edits
-    v.text_cursor.stroke = Stroke::new(1.5_f32, ACCENT);
+    v.selection.stroke = Stroke::new(1.5_f32, accent()); // focus ring on text edits
+    v.text_cursor.stroke = Stroke::new(1.5_f32, accent());
 
     let r = Rounding::same(5.0);
     v.widgets.noninteractive.rounding = r;
@@ -153,7 +197,7 @@ fn apply_theme(ctx: &egui::Context) {
     v.widgets.active.rounding = r;
     v.widgets.active.weak_bg_fill = Color32::from_rgb(220, 232, 248);
     v.widgets.active.bg_fill = Color32::from_rgb(210, 226, 248);
-    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, accent());
     v.widgets.active.fg_stroke = Stroke::new(1.5_f32, TEXT);
     v.widgets.active.expansion = 0.0;
 
@@ -192,8 +236,8 @@ pub fn button(text: impl Into<String>) -> egui::Button<'static> {
 /// Filled accent button for the main action of a screen.
 pub fn primary_button(text: impl Into<String>) -> egui::Button<'static> {
     egui::Button::new(bold(text, 14.0).color(Color32::WHITE))
-        .fill(ACCENT)
-        .stroke(Stroke::new(1.0_f32, ACCENT_PRESS))
+        .fill(accent())
+        .stroke(Stroke::new(1.0_f32, accent_press()))
         .min_size(egui::vec2(96.0, 30.0))
 }
 
@@ -256,22 +300,27 @@ pub fn header(ctx: &egui::Context, brand: &Brand, title: &str, subtitle: &str) {
                     ui.label(bold(title, 16.0));
                     ui.label(muted(subtitle).size(13.0));
                 });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(brand.image(44.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match &brand.header {
+                    Some(t) => {
+                        ui.add(egui::Image::from_texture((t.id(), fit(t, egui::vec2(120.0, 48.0)))));
+                    }
+                    None => {
+                        ui.add(brand.image(44.0));
+                    }
                 });
             });
         });
 }
 
 /// Bottom bar:  OUTNO            [< Back] [Next >]  [Cancel]
-/// `back` / `cancel`: None = hidden, Some(enabled).
+/// `back` / `cancel`: None = hidden, Some((enabled, label)).
 /// Enter activates Next, Escape activates Cancel.
 pub fn footer(
     ctx: &egui::Context,
-    back: Option<bool>,
+    back: Option<(bool, &str)>,
     next_label: &str,
     next_enabled: bool,
-    cancel: Option<bool>,
+    cancel: Option<(bool, &str)>,
 ) -> Nav {
     let mut nav = Nav::None;
     egui::TopBottomPanel::bottom("footer")
@@ -281,8 +330,8 @@ pub fn footer(
             ui.horizontal_centered(|ui| {
                 ui.label(bold(BRAND, 12.0).color(Color32::from_rgb(150, 156, 166)));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(en) = cancel {
-                        if ui.add_enabled(en, button("Cancel")).clicked() {
+                    if let Some((en, label)) = cancel {
+                        if ui.add_enabled(en, button(label)).clicked() {
                             nav = Nav::Cancel;
                         }
                         ui.add_space(8.0);
@@ -290,8 +339,8 @@ pub fn footer(
                     if ui.add_enabled(next_enabled, primary_button(next_label)).clicked() {
                         nav = Nav::Next;
                     }
-                    if let Some(en) = back {
-                        if ui.add_enabled(en, button("< Back")).clicked() {
+                    if let Some((en, label)) = back {
+                        if ui.add_enabled(en, button(label)).clicked() {
                             nav = Nav::Back;
                         }
                     }
@@ -303,15 +352,16 @@ pub fn footer(
         let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         if enter && next_enabled {
             nav = Nav::Next;
-        } else if esc && cancel == Some(true) {
+        } else if esc && cancel.is_some_and(|c| c.0) {
             nav = Nav::Cancel;
         }
     }
     nav
 }
 
-/// Blue gradient side banner for the Welcome / Finished pages.
-pub fn side_banner(ctx: &egui::Context, brand: &Brand, app_name: &str, version: &str) {
+/// Gradient side banner for the Welcome / Finished pages, or the custom wizard image.
+/// `version_line` is shown under the app name (already translated).
+pub fn side_banner(ctx: &egui::Context, brand: &Brand, app_name: &str, version_line: &str) {
     egui::SidePanel::left("banner")
         .exact_width(172.0)
         .resizable(false)
@@ -319,15 +369,27 @@ pub fn side_banner(ctx: &egui::Context, brand: &Brand, app_name: &str, version: 
         .frame(Frame::none())
         .show(ctx, |ui| {
             let rect = ui.max_rect();
-            vgradient(ui.painter(), rect, BANNER_TOP, BANNER_BOTTOM);
+            if let Some(t) = &brand.wizard {
+                // Cover the banner, cropping the image centrally if the aspect differs.
+                let (img, r) = (t.size_vec2(), rect.size());
+                let k = (r.x / img.x).max(r.y / img.y);
+                let (u, v) = (r.x / (img.x * k), r.y / (img.y * k));
+                let uv = egui::Rect::from_min_max(
+                    egui::pos2((1.0 - u) / 2.0, (1.0 - v) / 2.0),
+                    egui::pos2((1.0 + u) / 2.0, (1.0 + v) / 2.0),
+                );
+                ui.painter().image(t.id(), rect, uv, Color32::WHITE);
+                return;
+            }
+            vgradient(ui.painter(), rect, banner_top(), banner_bottom());
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink(14.0)), |ui| {
                 ui.add_space(46.0);
                 ui.vertical_centered(|ui| {
                     ui.add(brand.image(104.0));
                     ui.add_space(14.0);
                     ui.label(bold(app_name, 17.0).color(Color32::WHITE));
-                    if !version.is_empty() {
-                        ui.label(RichText::new(format!("Version {version}")).size(12.5).color(Color32::from_rgb(200, 222, 250)));
+                    if !version_line.is_empty() {
+                        ui.label(RichText::new(version_line).size(12.5).color(Color32::from_white_alpha(200)));
                     }
                 });
             });

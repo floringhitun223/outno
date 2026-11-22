@@ -1,0 +1,686 @@
+//! Setup / uninstaller language packs.
+//!
+//! Built-in packs: English, Romanian, French, German, Spanish, Italian. Custom packs are
+//! JSON files with the same keys (export a template from the OUTNO window). Missing keys
+//! fall back to English, so a partial translation still works.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct Pack {
+    /// Short code, e.g. "en", "ro", "pt-BR".
+    pub code: String,
+    /// Name shown in the language picker, in that language ("Română").
+    pub name: String,
+    pub strings: BTreeMap<String, String>,
+}
+
+/// The language a setup / uninstaller is running in.
+#[derive(Clone, Default)]
+pub struct Lang {
+    pub code: String,
+    strings: BTreeMap<String, String>,
+}
+
+impl Lang {
+    pub fn from_pack(p: &Pack) -> Self {
+        Self { code: p.code.clone(), strings: p.strings.clone() }
+    }
+
+    pub fn from_strings(code: &str, strings: BTreeMap<String, String>) -> Self {
+        Self { code: code.into(), strings }
+    }
+
+    pub fn english() -> Self {
+        Self::from_pack(&builtin("en").unwrap_or_default())
+    }
+
+    pub fn strings(&self) -> &BTreeMap<String, String> {
+        &self.strings
+    }
+
+    /// Raw string for `key` (pack → English → the key itself).
+    pub fn get(&self, key: &str) -> String {
+        if let Some(s) = self.strings.get(key).filter(|s| !s.is_empty()) {
+            return s.clone();
+        }
+        table("en")
+            .and_then(|t| t.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()))
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    /// String with `{name}` placeholders replaced.
+    pub fn fmt(&self, key: &str, args: &[(&str, &str)]) -> String {
+        let mut s = self.get(key);
+        for (k, v) in args {
+            s = s.replace(&format!("{{{k}}}"), v);
+        }
+        s
+    }
+}
+
+pub const BUILTIN: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("ro", "Română"),
+    ("fr", "Français"),
+    ("de", "Deutsch"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+];
+
+pub fn builtin(code: &str) -> Option<Pack> {
+    let name = BUILTIN.iter().find(|(c, _)| *c == code)?.1;
+    let t = table(code)?;
+    Some(Pack {
+        code: code.into(),
+        name: name.into(),
+        strings: t.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    })
+}
+
+/// English pack as pretty JSON, used as a template for new translations.
+pub fn template_json() -> String {
+    let mut p = builtin("en").unwrap_or_default();
+    p.code = "xx".into();
+    p.name = "My language".into();
+    serde_json::to_string_pretty(&p).unwrap_or_default()
+}
+
+/// Pick the pack that best matches the system UI language (`"ro"`, `"pt-BR"` ...).
+pub fn best_match(packs: &[Pack], system: &str) -> usize {
+    let sys = system.to_lowercase();
+    let primary = sys.split(['-', '_']).next().unwrap_or("").to_string();
+    packs
+        .iter()
+        .position(|p| p.code.to_lowercase() == sys)
+        .or_else(|| packs.iter().position(|p| p.code.to_lowercase().split(['-', '_']).next() == Some(primary.as_str())))
+        .unwrap_or(0)
+}
+
+type Table = &'static [(&'static str, &'static str)];
+
+fn table(code: &str) -> Option<Table> {
+    Some(match code {
+        "en" => EN,
+        "ro" => RO,
+        "fr" => FR,
+        "de" => DE,
+        "es" => ES,
+        "it" => IT,
+        _ => return None,
+    })
+}
+
+const EN: Table = &[
+    ("btn_next", "Next >"),
+    ("btn_back", "< Back"),
+    ("btn_cancel", "Cancel"),
+    ("btn_install", "Install"),
+    ("btn_finish", "Finish"),
+    ("btn_close", "Close"),
+    ("btn_browse", "Browse..."),
+    ("btn_retry", "Retry"),
+    ("btn_ok", "OK"),
+    ("btn_uninstall", "Uninstall"),
+    ("btn_exit", "Exit Setup"),
+    ("btn_continue", "Continue"),
+    ("lang_title", "Select Setup Language"),
+    ("lang_sub", "Select the language to use during the installation."),
+    ("welcome_title", "Welcome to the {app} Setup Wizard"),
+    ("welcome_body", "This will install {app} version {version} on your computer."),
+    ("welcome_close", "It is recommended that you close all other applications before continuing."),
+    ("welcome_next", "Click Next to continue, or Cancel to exit Setup."),
+    ("welcome_upgrade", "{app} {old} is already installed. Setup will update it to version {version}."),
+    ("published_by", "Published by {publisher}"),
+    ("banner_version", "Version {version}"),
+    ("lic_title", "License Agreement"),
+    ("lic_sub", "Please read the following important information before continuing."),
+    ("lic_body", "You must accept the terms of this agreement before continuing with the installation."),
+    ("lic_accept", "I accept the agreement"),
+    ("lic_decline", "I do not accept the agreement"),
+    ("dir_title", "Select Destination Location"),
+    ("dir_sub", "Where should {app} be installed?"),
+    ("dir_body", "Setup will install {app} into the following folder."),
+    ("dir_hint", "To continue, click Next. To choose a different folder, click Browse."),
+    ("dir_empty", "Choose a destination folder."),
+    ("dir_relative", "Enter a full path, for example C:\\Apps\\{app}."),
+    ("dir_is_file", "A file with this name already exists."),
+    ("dir_space", "At least {size} of free disk space is required."),
+    ("dir_admin", "Administrator permission will be requested to install into this folder."),
+    ("mode_label", "Install for"),
+    ("mode_user", "Only for me (recommended)"),
+    ("mode_all", "All users of this computer (requires administrator)"),
+    ("tasks_title", "Select Additional Tasks"),
+    ("tasks_sub", "Which additional tasks should be performed?"),
+    ("tasks_body", "Select the additional tasks you would like Setup to perform while installing {app}, then click Next."),
+    ("tasks_shortcuts", "Additional shortcuts"),
+    ("task_desktop", "Create a desktop shortcut"),
+    ("task_startmenu", "Create a Start Menu shortcut"),
+    ("ready_title", "Ready to Install"),
+    ("ready_sub", "Setup is now ready to begin installing {app} on your computer."),
+    ("ready_body", "Click Install to continue, or click Back to review or change any settings."),
+    ("ready_dest", "Destination location"),
+    ("ready_space", "Disk space required"),
+    ("ready_tasks", "Additional tasks"),
+    ("ready_scope", "Installed for"),
+    ("scope_user", "Current user only"),
+    ("scope_all", "All users"),
+    ("ready_running", "{app} seems to be running. Close it before you click Install."),
+    ("inst_title", "Installing"),
+    ("inst_sub", "Please wait while Setup installs {app} on your computer."),
+    ("inst_extracting", "Extracting files..."),
+    ("inst_items", "{done} of {total} items"),
+    ("inst_admin_wait", "Waiting for administrator permission..."),
+    ("inst_failed", "Setup could not finish"),
+    ("inst_failed_hint", "Click Retry to try again, or Close to exit Setup."),
+    ("err_in_use", "{path} is in use. Close {app} and click Retry."),
+    ("err_denied", "Access to {path} was denied. Try a different folder or install for all users."),
+    ("err_disk_full", "There is not enough free disk space to write {path}."),
+    ("err_generic", "{path}: {error}"),
+    ("err_no_admin", "Administrator permission was not granted."),
+    ("fin_title", "Completing the {app} Setup Wizard"),
+    ("fin_body", "Setup has finished installing {app} on your computer."),
+    ("fin_hint", "Click Finish to exit Setup."),
+    ("fin_launch", "Launch {app}"),
+    ("exit_title", "Exit Setup"),
+    ("exit_body", "Setup is not complete. If you exit now, the program will not be installed."),
+    ("exit_q", "Exit Setup?"),
+    ("un_title", "Uninstall {app}"),
+    ("un_sub", "Remove the application from your computer."),
+    ("un_confirm", "Are you sure you want to completely remove {app} and all of its components?"),
+    ("un_location", "Install location"),
+    ("un_counts", "{files} files, {shortcuts} shortcuts"),
+    ("un_working", "Removing {app}..."),
+    ("un_done_title", "Uninstall Complete"),
+    ("un_done_sub", "{app} was removed."),
+    ("un_done_body", "{app} was successfully removed from your computer."),
+    ("un_leftovers", "Files you created after installing may still be in the install folder."),
+    ("un_failed", "Uninstall could not finish"),
+    ("un_missing_title", "Can't uninstall"),
+    ("un_missing_sub", "Uninstall information is missing."),
+    ("un_missing_body", "The uninstall information was not found in:"),
+    ("un_missing_hint", "The application may already have been removed."),
+];
+
+const RO: Table = &[
+    ("btn_next", "Înainte >"),
+    ("btn_back", "< Înapoi"),
+    ("btn_cancel", "Anulare"),
+    ("btn_install", "Instalează"),
+    ("btn_finish", "Terminare"),
+    ("btn_close", "Închide"),
+    ("btn_browse", "Răsfoire..."),
+    ("btn_retry", "Reîncearcă"),
+    ("btn_ok", "OK"),
+    ("btn_uninstall", "Dezinstalează"),
+    ("btn_exit", "Ieșire"),
+    ("btn_continue", "Continuă"),
+    ("lang_title", "Selectați limba instalării"),
+    ("lang_sub", "Selectați limba folosită în timpul instalării."),
+    ("welcome_title", "Bun venit în asistentul de instalare {app}"),
+    ("welcome_body", "Se va instala {app} versiunea {version} pe calculatorul dumneavoastră."),
+    ("welcome_close", "Este recomandat să închideți toate celelalte aplicații înainte de a continua."),
+    ("welcome_next", "Apăsați Înainte pentru a continua sau Anulare pentru a ieși."),
+    ("welcome_upgrade", "{app} {old} este deja instalat. Va fi actualizat la versiunea {version}."),
+    ("published_by", "Publicat de {publisher}"),
+    ("banner_version", "Versiunea {version}"),
+    ("lic_title", "Acord de licență"),
+    ("lic_sub", "Citiți următoarele informații importante înainte de a continua."),
+    ("lic_body", "Trebuie să acceptați termenii acestui acord pentru a continua instalarea."),
+    ("lic_accept", "Accept acordul"),
+    ("lic_decline", "Nu accept acordul"),
+    ("dir_title", "Alegeți locația de instalare"),
+    ("dir_sub", "Unde doriți să fie instalat {app}?"),
+    ("dir_body", "{app} va fi instalat în următorul folder."),
+    ("dir_hint", "Pentru a continua, apăsați Înainte. Pentru alt folder, apăsați Răsfoire."),
+    ("dir_empty", "Alegeți un folder de destinație."),
+    ("dir_relative", "Introduceți o cale completă, de exemplu C:\\Aplicatii\\{app}."),
+    ("dir_is_file", "Există deja un fișier cu acest nume."),
+    ("dir_space", "Este necesar cel puțin {size} de spațiu liber pe disc."),
+    ("dir_admin", "Pentru acest folder se va cere permisiunea de administrator."),
+    ("mode_label", "Instalare pentru"),
+    ("mode_user", "Doar pentru mine (recomandat)"),
+    ("mode_all", "Toți utilizatorii acestui calculator (necesită administrator)"),
+    ("tasks_title", "Selectați sarcinile suplimentare"),
+    ("tasks_sub", "Ce sarcini suplimentare trebuie efectuate?"),
+    ("tasks_body", "Selectați sarcinile suplimentare pe care să le efectueze instalarea {app}, apoi apăsați Înainte."),
+    ("tasks_shortcuts", "Scurtături suplimentare"),
+    ("task_desktop", "Creează o scurtătură pe desktop"),
+    ("task_startmenu", "Creează o scurtătură în meniul Start"),
+    ("ready_title", "Gata de instalare"),
+    ("ready_sub", "Instalarea {app} pe calculatorul dumneavoastră poate începe."),
+    ("ready_body", "Apăsați Instalează pentru a continua sau Înapoi pentru a modifica setările."),
+    ("ready_dest", "Locația de instalare"),
+    ("ready_space", "Spațiu necesar pe disc"),
+    ("ready_tasks", "Sarcini suplimentare"),
+    ("ready_scope", "Instalat pentru"),
+    ("scope_user", "Doar utilizatorul curent"),
+    ("scope_all", "Toți utilizatorii"),
+    ("ready_running", "{app} pare să ruleze. Închideți-l înainte de a apăsa Instalează."),
+    ("inst_title", "Se instalează"),
+    ("inst_sub", "Așteptați cât timp {app} este instalat pe calculatorul dumneavoastră."),
+    ("inst_extracting", "Se extrag fișierele..."),
+    ("inst_items", "{done} din {total} elemente"),
+    ("inst_admin_wait", "Se așteaptă permisiunea de administrator..."),
+    ("inst_failed", "Instalarea nu a putut fi finalizată"),
+    ("inst_failed_hint", "Apăsați Reîncearcă pentru a încerca din nou sau Închide pentru a ieși."),
+    ("err_in_use", "{path} este folosit. Închideți {app} și apăsați Reîncearcă."),
+    ("err_denied", "Accesul la {path} a fost refuzat. Alegeți alt folder sau instalați pentru toți utilizatorii."),
+    ("err_disk_full", "Nu există suficient spațiu liber pentru a scrie {path}."),
+    ("err_generic", "{path}: {error}"),
+    ("err_no_admin", "Permisiunea de administrator nu a fost acordată."),
+    ("fin_title", "Finalizarea asistentului de instalare {app}"),
+    ("fin_body", "{app} a fost instalat pe calculatorul dumneavoastră."),
+    ("fin_hint", "Apăsați Terminare pentru a ieși."),
+    ("fin_launch", "Pornește {app}"),
+    ("exit_title", "Ieșire din instalare"),
+    ("exit_body", "Instalarea nu este completă. Dacă ieșiți acum, programul nu va fi instalat."),
+    ("exit_q", "Ieșiți din instalare?"),
+    ("un_title", "Dezinstalare {app}"),
+    ("un_sub", "Eliminați aplicația de pe calculator."),
+    ("un_confirm", "Sigur doriți să eliminați complet {app} și toate componentele sale?"),
+    ("un_location", "Locația instalării"),
+    ("un_counts", "{files} fișiere, {shortcuts} scurtături"),
+    ("un_working", "Se elimină {app}..."),
+    ("un_done_title", "Dezinstalare finalizată"),
+    ("un_done_sub", "{app} a fost eliminat."),
+    ("un_done_body", "{app} a fost eliminat cu succes de pe calculator."),
+    ("un_leftovers", "Fișierele create după instalare pot rămâne în folderul de instalare."),
+    ("un_failed", "Dezinstalarea nu a putut fi finalizată"),
+    ("un_missing_title", "Dezinstalarea nu este posibilă"),
+    ("un_missing_sub", "Lipsesc informațiile de dezinstalare."),
+    ("un_missing_body", "Informațiile de dezinstalare nu au fost găsite în:"),
+    ("un_missing_hint", "Este posibil ca aplicația să fi fost deja eliminată."),
+];
+
+const FR: Table = &[
+    ("btn_next", "Suivant >"),
+    ("btn_back", "< Précédent"),
+    ("btn_cancel", "Annuler"),
+    ("btn_install", "Installer"),
+    ("btn_finish", "Terminer"),
+    ("btn_close", "Fermer"),
+    ("btn_browse", "Parcourir..."),
+    ("btn_retry", "Réessayer"),
+    ("btn_ok", "OK"),
+    ("btn_uninstall", "Désinstaller"),
+    ("btn_exit", "Quitter"),
+    ("btn_continue", "Continuer"),
+    ("lang_title", "Langue de l'installation"),
+    ("lang_sub", "Choisissez la langue à utiliser pendant l'installation."),
+    ("welcome_title", "Bienvenue dans l'assistant d'installation de {app}"),
+    ("welcome_body", "{app} version {version} va être installé sur votre ordinateur."),
+    ("welcome_close", "Il est recommandé de fermer toutes les autres applications avant de continuer."),
+    ("welcome_next", "Cliquez sur Suivant pour continuer ou sur Annuler pour quitter."),
+    ("welcome_upgrade", "{app} {old} est déjà installé. Il sera mis à jour vers la version {version}."),
+    ("published_by", "Publié par {publisher}"),
+    ("banner_version", "Version {version}"),
+    ("lic_title", "Accord de licence"),
+    ("lic_sub", "Veuillez lire les informations importantes suivantes avant de continuer."),
+    ("lic_body", "Vous devez accepter les termes de cet accord pour poursuivre l'installation."),
+    ("lic_accept", "J'accepte l'accord"),
+    ("lic_decline", "Je refuse l'accord"),
+    ("dir_title", "Dossier de destination"),
+    ("dir_sub", "Où {app} doit-il être installé ?"),
+    ("dir_body", "{app} sera installé dans le dossier suivant."),
+    ("dir_hint", "Cliquez sur Suivant pour continuer, ou sur Parcourir pour choisir un autre dossier."),
+    ("dir_empty", "Choisissez un dossier de destination."),
+    ("dir_relative", "Saisissez un chemin complet, par exemple C:\\Apps\\{app}."),
+    ("dir_is_file", "Un fichier portant ce nom existe déjà."),
+    ("dir_space", "Au moins {size} d'espace disque libre sont nécessaires."),
+    ("dir_admin", "L'autorisation d'administrateur sera demandée pour installer dans ce dossier."),
+    ("mode_label", "Installer pour"),
+    ("mode_user", "Moi uniquement (recommandé)"),
+    ("mode_all", "Tous les utilisateurs de cet ordinateur (administrateur requis)"),
+    ("tasks_title", "Tâches supplémentaires"),
+    ("tasks_sub", "Quelles tâches supplémentaires doivent être effectuées ?"),
+    ("tasks_body", "Sélectionnez les tâches supplémentaires à effectuer pendant l'installation de {app}, puis cliquez sur Suivant."),
+    ("tasks_shortcuts", "Raccourcis supplémentaires"),
+    ("task_desktop", "Créer un raccourci sur le bureau"),
+    ("task_startmenu", "Créer un raccourci dans le menu Démarrer"),
+    ("ready_title", "Prêt à installer"),
+    ("ready_sub", "L'installation de {app} sur votre ordinateur peut commencer."),
+    ("ready_body", "Cliquez sur Installer pour continuer, ou sur Précédent pour modifier les paramètres."),
+    ("ready_dest", "Dossier de destination"),
+    ("ready_space", "Espace disque requis"),
+    ("ready_tasks", "Tâches supplémentaires"),
+    ("ready_scope", "Installé pour"),
+    ("scope_user", "L'utilisateur actuel uniquement"),
+    ("scope_all", "Tous les utilisateurs"),
+    ("ready_running", "{app} semble être en cours d'exécution. Fermez-le avant de cliquer sur Installer."),
+    ("inst_title", "Installation"),
+    ("inst_sub", "Veuillez patienter pendant l'installation de {app} sur votre ordinateur."),
+    ("inst_extracting", "Extraction des fichiers..."),
+    ("inst_items", "{done} éléments sur {total}"),
+    ("inst_admin_wait", "En attente de l'autorisation d'administrateur..."),
+    ("inst_failed", "L'installation n'a pas pu aboutir"),
+    ("inst_failed_hint", "Cliquez sur Réessayer pour recommencer, ou sur Fermer pour quitter."),
+    ("err_in_use", "{path} est en cours d'utilisation. Fermez {app} et cliquez sur Réessayer."),
+    ("err_denied", "L'accès à {path} a été refusé. Choisissez un autre dossier ou installez pour tous les utilisateurs."),
+    ("err_disk_full", "Espace disque insuffisant pour écrire {path}."),
+    ("err_generic", "{path} : {error}"),
+    ("err_no_admin", "L'autorisation d'administrateur n'a pas été accordée."),
+    ("fin_title", "Fin de l'installation de {app}"),
+    ("fin_body", "{app} a été installé sur votre ordinateur."),
+    ("fin_hint", "Cliquez sur Terminer pour quitter."),
+    ("fin_launch", "Lancer {app}"),
+    ("exit_title", "Quitter l'installation"),
+    ("exit_body", "L'installation n'est pas terminée. Si vous quittez maintenant, le programme ne sera pas installé."),
+    ("exit_q", "Quitter l'installation ?"),
+    ("un_title", "Désinstaller {app}"),
+    ("un_sub", "Supprimer l'application de votre ordinateur."),
+    ("un_confirm", "Voulez-vous vraiment supprimer complètement {app} et tous ses composants ?"),
+    ("un_location", "Emplacement"),
+    ("un_counts", "{files} fichiers, {shortcuts} raccourcis"),
+    ("un_working", "Suppression de {app}..."),
+    ("un_done_title", "Désinstallation terminée"),
+    ("un_done_sub", "{app} a été supprimé."),
+    ("un_done_body", "{app} a été supprimé de votre ordinateur."),
+    ("un_leftovers", "Les fichiers créés après l'installation peuvent rester dans le dossier d'installation."),
+    ("un_failed", "La désinstallation n'a pas pu aboutir"),
+    ("un_missing_title", "Désinstallation impossible"),
+    ("un_missing_sub", "Les informations de désinstallation sont introuvables."),
+    ("un_missing_body", "Les informations de désinstallation sont introuvables dans :"),
+    ("un_missing_hint", "L'application a peut-être déjà été supprimée."),
+];
+
+const DE: Table = &[
+    ("btn_next", "Weiter >"),
+    ("btn_back", "< Zurück"),
+    ("btn_cancel", "Abbrechen"),
+    ("btn_install", "Installieren"),
+    ("btn_finish", "Fertigstellen"),
+    ("btn_close", "Schließen"),
+    ("btn_browse", "Durchsuchen..."),
+    ("btn_retry", "Wiederholen"),
+    ("btn_ok", "OK"),
+    ("btn_uninstall", "Deinstallieren"),
+    ("btn_exit", "Setup beenden"),
+    ("btn_continue", "Fortfahren"),
+    ("lang_title", "Setup-Sprache auswählen"),
+    ("lang_sub", "Wählen Sie die Sprache für die Installation."),
+    ("welcome_title", "Willkommen beim Setup-Assistenten für {app}"),
+    ("welcome_body", "{app} Version {version} wird auf Ihrem Computer installiert."),
+    ("welcome_close", "Es wird empfohlen, alle anderen Anwendungen zu schließen, bevor Sie fortfahren."),
+    ("welcome_next", "Klicken Sie auf Weiter, um fortzufahren, oder auf Abbrechen, um das Setup zu beenden."),
+    ("welcome_upgrade", "{app} {old} ist bereits installiert. Setup aktualisiert es auf Version {version}."),
+    ("published_by", "Herausgegeben von {publisher}"),
+    ("banner_version", "Version {version}"),
+    ("lic_title", "Lizenzvereinbarung"),
+    ("lic_sub", "Bitte lesen Sie die folgenden wichtigen Informationen, bevor Sie fortfahren."),
+    ("lic_body", "Sie müssen die Bedingungen dieser Vereinbarung akzeptieren, um die Installation fortzusetzen."),
+    ("lic_accept", "Ich akzeptiere die Vereinbarung"),
+    ("lic_decline", "Ich lehne die Vereinbarung ab"),
+    ("dir_title", "Zielordner wählen"),
+    ("dir_sub", "Wohin soll {app} installiert werden?"),
+    ("dir_body", "{app} wird in den folgenden Ordner installiert."),
+    ("dir_hint", "Klicken Sie auf Weiter, um fortzufahren, oder auf Durchsuchen, um einen anderen Ordner zu wählen."),
+    ("dir_empty", "Wählen Sie einen Zielordner."),
+    ("dir_relative", "Geben Sie einen vollständigen Pfad ein, z. B. C:\\Apps\\{app}."),
+    ("dir_is_file", "Eine Datei mit diesem Namen existiert bereits."),
+    ("dir_space", "Mindestens {size} freier Speicherplatz wird benötigt."),
+    ("dir_admin", "Für diesen Ordner werden Administratorrechte angefordert."),
+    ("mode_label", "Installieren für"),
+    ("mode_user", "Nur für mich (empfohlen)"),
+    ("mode_all", "Alle Benutzer dieses Computers (Administrator erforderlich)"),
+    ("tasks_title", "Zusätzliche Aufgaben auswählen"),
+    ("tasks_sub", "Welche zusätzlichen Aufgaben sollen ausgeführt werden?"),
+    ("tasks_body", "Wählen Sie die zusätzlichen Aufgaben für die Installation von {app} und klicken Sie dann auf Weiter."),
+    ("tasks_shortcuts", "Zusätzliche Verknüpfungen"),
+    ("task_desktop", "Desktop-Verknüpfung erstellen"),
+    ("task_startmenu", "Verknüpfung im Startmenü erstellen"),
+    ("ready_title", "Bereit zur Installation"),
+    ("ready_sub", "Setup ist bereit, {app} auf Ihrem Computer zu installieren."),
+    ("ready_body", "Klicken Sie auf Installieren, um fortzufahren, oder auf Zurück, um Einstellungen zu ändern."),
+    ("ready_dest", "Zielordner"),
+    ("ready_space", "Benötigter Speicherplatz"),
+    ("ready_tasks", "Zusätzliche Aufgaben"),
+    ("ready_scope", "Installiert für"),
+    ("scope_user", "Nur aktuellen Benutzer"),
+    ("scope_all", "Alle Benutzer"),
+    ("ready_running", "{app} scheint zu laufen. Schließen Sie es, bevor Sie auf Installieren klicken."),
+    ("inst_title", "Installation"),
+    ("inst_sub", "Bitte warten Sie, während {app} auf Ihrem Computer installiert wird."),
+    ("inst_extracting", "Dateien werden entpackt..."),
+    ("inst_items", "{done} von {total} Elementen"),
+    ("inst_admin_wait", "Warten auf Administratorrechte..."),
+    ("inst_failed", "Setup konnte nicht abgeschlossen werden"),
+    ("inst_failed_hint", "Klicken Sie auf Wiederholen, um es erneut zu versuchen, oder auf Schließen, um das Setup zu beenden."),
+    ("err_in_use", "{path} wird verwendet. Schließen Sie {app} und klicken Sie auf Wiederholen."),
+    ("err_denied", "Zugriff auf {path} verweigert. Wählen Sie einen anderen Ordner oder installieren Sie für alle Benutzer."),
+    ("err_disk_full", "Nicht genügend Speicherplatz, um {path} zu schreiben."),
+    ("err_generic", "{path}: {error}"),
+    ("err_no_admin", "Administratorrechte wurden nicht erteilt."),
+    ("fin_title", "Abschluss des Setup-Assistenten für {app}"),
+    ("fin_body", "{app} wurde auf Ihrem Computer installiert."),
+    ("fin_hint", "Klicken Sie auf Fertigstellen, um das Setup zu beenden."),
+    ("fin_launch", "{app} starten"),
+    ("exit_title", "Setup beenden"),
+    ("exit_body", "Das Setup ist nicht abgeschlossen. Wenn Sie es jetzt beenden, wird das Programm nicht installiert."),
+    ("exit_q", "Setup beenden?"),
+    ("un_title", "{app} deinstallieren"),
+    ("un_sub", "Die Anwendung von Ihrem Computer entfernen."),
+    ("un_confirm", "Möchten Sie {app} und alle zugehörigen Komponenten wirklich vollständig entfernen?"),
+    ("un_location", "Installationsort"),
+    ("un_counts", "{files} Dateien, {shortcuts} Verknüpfungen"),
+    ("un_working", "{app} wird entfernt..."),
+    ("un_done_title", "Deinstallation abgeschlossen"),
+    ("un_done_sub", "{app} wurde entfernt."),
+    ("un_done_body", "{app} wurde erfolgreich von Ihrem Computer entfernt."),
+    ("un_leftovers", "Nach der Installation erstellte Dateien können im Installationsordner verbleiben."),
+    ("un_failed", "Deinstallation konnte nicht abgeschlossen werden"),
+    ("un_missing_title", "Deinstallation nicht möglich"),
+    ("un_missing_sub", "Deinstallationsinformationen fehlen."),
+    ("un_missing_body", "Die Deinstallationsinformationen wurden nicht gefunden in:"),
+    ("un_missing_hint", "Die Anwendung wurde möglicherweise bereits entfernt."),
+];
+
+const ES: Table = &[
+    ("btn_next", "Siguiente >"),
+    ("btn_back", "< Atrás"),
+    ("btn_cancel", "Cancelar"),
+    ("btn_install", "Instalar"),
+    ("btn_finish", "Finalizar"),
+    ("btn_close", "Cerrar"),
+    ("btn_browse", "Examinar..."),
+    ("btn_retry", "Reintentar"),
+    ("btn_ok", "Aceptar"),
+    ("btn_uninstall", "Desinstalar"),
+    ("btn_exit", "Salir"),
+    ("btn_continue", "Continuar"),
+    ("lang_title", "Idioma de la instalación"),
+    ("lang_sub", "Seleccione el idioma que se usará durante la instalación."),
+    ("welcome_title", "Bienvenido al asistente de instalación de {app}"),
+    ("welcome_body", "Se instalará {app} versión {version} en su equipo."),
+    ("welcome_close", "Se recomienda cerrar todas las demás aplicaciones antes de continuar."),
+    ("welcome_next", "Haga clic en Siguiente para continuar o en Cancelar para salir."),
+    ("welcome_upgrade", "{app} {old} ya está instalado. Se actualizará a la versión {version}."),
+    ("published_by", "Publicado por {publisher}"),
+    ("banner_version", "Versión {version}"),
+    ("lic_title", "Acuerdo de licencia"),
+    ("lic_sub", "Lea la siguiente información importante antes de continuar."),
+    ("lic_body", "Debe aceptar los términos de este acuerdo para continuar con la instalación."),
+    ("lic_accept", "Acepto el acuerdo"),
+    ("lic_decline", "No acepto el acuerdo"),
+    ("dir_title", "Carpeta de destino"),
+    ("dir_sub", "¿Dónde debe instalarse {app}?"),
+    ("dir_body", "{app} se instalará en la siguiente carpeta."),
+    ("dir_hint", "Haga clic en Siguiente para continuar o en Examinar para elegir otra carpeta."),
+    ("dir_empty", "Elija una carpeta de destino."),
+    ("dir_relative", "Escriba una ruta completa, por ejemplo C:\\Apps\\{app}."),
+    ("dir_is_file", "Ya existe un archivo con este nombre."),
+    ("dir_space", "Se necesitan al menos {size} de espacio libre en disco."),
+    ("dir_admin", "Se solicitará permiso de administrador para instalar en esta carpeta."),
+    ("mode_label", "Instalar para"),
+    ("mode_user", "Solo para mí (recomendado)"),
+    ("mode_all", "Todos los usuarios de este equipo (requiere administrador)"),
+    ("tasks_title", "Tareas adicionales"),
+    ("tasks_sub", "¿Qué tareas adicionales deben realizarse?"),
+    ("tasks_body", "Seleccione las tareas adicionales que desea realizar al instalar {app} y haga clic en Siguiente."),
+    ("tasks_shortcuts", "Accesos directos adicionales"),
+    ("task_desktop", "Crear un acceso directo en el escritorio"),
+    ("task_startmenu", "Crear un acceso directo en el menú Inicio"),
+    ("ready_title", "Listo para instalar"),
+    ("ready_sub", "Todo está listo para instalar {app} en su equipo."),
+    ("ready_body", "Haga clic en Instalar para continuar o en Atrás para revisar la configuración."),
+    ("ready_dest", "Carpeta de destino"),
+    ("ready_space", "Espacio en disco necesario"),
+    ("ready_tasks", "Tareas adicionales"),
+    ("ready_scope", "Instalado para"),
+    ("scope_user", "Solo el usuario actual"),
+    ("scope_all", "Todos los usuarios"),
+    ("ready_running", "{app} parece estar en ejecución. Ciérrelo antes de hacer clic en Instalar."),
+    ("inst_title", "Instalando"),
+    ("inst_sub", "Espere mientras se instala {app} en su equipo."),
+    ("inst_extracting", "Extrayendo archivos..."),
+    ("inst_items", "{done} de {total} elementos"),
+    ("inst_admin_wait", "Esperando el permiso de administrador..."),
+    ("inst_failed", "No se pudo completar la instalación"),
+    ("inst_failed_hint", "Haga clic en Reintentar para volver a intentarlo o en Cerrar para salir."),
+    ("err_in_use", "{path} está en uso. Cierre {app} y haga clic en Reintentar."),
+    ("err_denied", "Se denegó el acceso a {path}. Elija otra carpeta o instale para todos los usuarios."),
+    ("err_disk_full", "No hay espacio suficiente en disco para escribir {path}."),
+    ("err_generic", "{path}: {error}"),
+    ("err_no_admin", "No se concedió el permiso de administrador."),
+    ("fin_title", "Finalizando el asistente de instalación de {app}"),
+    ("fin_body", "{app} se ha instalado en su equipo."),
+    ("fin_hint", "Haga clic en Finalizar para salir."),
+    ("fin_launch", "Iniciar {app}"),
+    ("exit_title", "Salir de la instalación"),
+    ("exit_body", "La instalación no ha terminado. Si sale ahora, el programa no se instalará."),
+    ("exit_q", "¿Salir de la instalación?"),
+    ("un_title", "Desinstalar {app}"),
+    ("un_sub", "Quitar la aplicación de su equipo."),
+    ("un_confirm", "¿Seguro que desea quitar por completo {app} y todos sus componentes?"),
+    ("un_location", "Ubicación"),
+    ("un_counts", "{files} archivos, {shortcuts} accesos directos"),
+    ("un_working", "Quitando {app}..."),
+    ("un_done_title", "Desinstalación completada"),
+    ("un_done_sub", "Se ha quitado {app}."),
+    ("un_done_body", "{app} se ha quitado correctamente de su equipo."),
+    ("un_leftovers", "Los archivos creados después de la instalación pueden quedar en la carpeta de instalación."),
+    ("un_failed", "No se pudo completar la desinstalación"),
+    ("un_missing_title", "No se puede desinstalar"),
+    ("un_missing_sub", "Falta la información de desinstalación."),
+    ("un_missing_body", "No se encontró la información de desinstalación en:"),
+    ("un_missing_hint", "Es posible que la aplicación ya se haya quitado."),
+];
+
+const IT: Table = &[
+    ("btn_next", "Avanti >"),
+    ("btn_back", "< Indietro"),
+    ("btn_cancel", "Annulla"),
+    ("btn_install", "Installa"),
+    ("btn_finish", "Fine"),
+    ("btn_close", "Chiudi"),
+    ("btn_browse", "Sfoglia..."),
+    ("btn_retry", "Riprova"),
+    ("btn_ok", "OK"),
+    ("btn_uninstall", "Disinstalla"),
+    ("btn_exit", "Esci"),
+    ("btn_continue", "Continua"),
+    ("lang_title", "Lingua dell'installazione"),
+    ("lang_sub", "Seleziona la lingua da usare durante l'installazione."),
+    ("welcome_title", "Benvenuto nell'installazione guidata di {app}"),
+    ("welcome_body", "Verrà installato {app} versione {version} sul computer."),
+    ("welcome_close", "Si consiglia di chiudere tutte le altre applicazioni prima di continuare."),
+    ("welcome_next", "Fai clic su Avanti per continuare o su Annulla per uscire."),
+    ("welcome_upgrade", "{app} {old} è già installato. Verrà aggiornato alla versione {version}."),
+    ("published_by", "Pubblicato da {publisher}"),
+    ("banner_version", "Versione {version}"),
+    ("lic_title", "Contratto di licenza"),
+    ("lic_sub", "Leggi le seguenti informazioni importanti prima di continuare."),
+    ("lic_body", "Per continuare l'installazione è necessario accettare i termini del contratto."),
+    ("lic_accept", "Accetto il contratto"),
+    ("lic_decline", "Non accetto il contratto"),
+    ("dir_title", "Cartella di destinazione"),
+    ("dir_sub", "Dove vuoi installare {app}?"),
+    ("dir_body", "{app} verrà installato nella seguente cartella."),
+    ("dir_hint", "Fai clic su Avanti per continuare o su Sfoglia per scegliere un'altra cartella."),
+    ("dir_empty", "Scegli una cartella di destinazione."),
+    ("dir_relative", "Inserisci un percorso completo, ad esempio C:\\Apps\\{app}."),
+    ("dir_is_file", "Esiste già un file con questo nome."),
+    ("dir_space", "Sono necessari almeno {size} di spazio libero su disco."),
+    ("dir_admin", "Per installare in questa cartella verrà richiesta l'autorizzazione di amministratore."),
+    ("mode_label", "Installa per"),
+    ("mode_user", "Solo per me (consigliato)"),
+    ("mode_all", "Tutti gli utenti del computer (richiede amministratore)"),
+    ("tasks_title", "Attività aggiuntive"),
+    ("tasks_sub", "Quali attività aggiuntive vuoi eseguire?"),
+    ("tasks_body", "Seleziona le attività aggiuntive da eseguire durante l'installazione di {app}, poi fai clic su Avanti."),
+    ("tasks_shortcuts", "Collegamenti aggiuntivi"),
+    ("task_desktop", "Crea un collegamento sul desktop"),
+    ("task_startmenu", "Crea un collegamento nel menu Start"),
+    ("ready_title", "Pronto per l'installazione"),
+    ("ready_sub", "L'installazione di {app} sul computer può iniziare."),
+    ("ready_body", "Fai clic su Installa per continuare o su Indietro per modificare le impostazioni."),
+    ("ready_dest", "Cartella di destinazione"),
+    ("ready_space", "Spazio su disco richiesto"),
+    ("ready_tasks", "Attività aggiuntive"),
+    ("ready_scope", "Installato per"),
+    ("scope_user", "Solo l'utente corrente"),
+    ("scope_all", "Tutti gli utenti"),
+    ("ready_running", "{app} sembra in esecuzione. Chiudilo prima di fare clic su Installa."),
+    ("inst_title", "Installazione"),
+    ("inst_sub", "Attendi mentre {app} viene installato sul computer."),
+    ("inst_extracting", "Estrazione dei file..."),
+    ("inst_items", "{done} di {total} elementi"),
+    ("inst_admin_wait", "In attesa dell'autorizzazione di amministratore..."),
+    ("inst_failed", "Impossibile completare l'installazione"),
+    ("inst_failed_hint", "Fai clic su Riprova per riprovare o su Chiudi per uscire."),
+    ("err_in_use", "{path} è in uso. Chiudi {app} e fai clic su Riprova."),
+    ("err_denied", "Accesso a {path} negato. Scegli un'altra cartella o installa per tutti gli utenti."),
+    ("err_disk_full", "Spazio su disco insufficiente per scrivere {path}."),
+    ("err_generic", "{path}: {error}"),
+    ("err_no_admin", "L'autorizzazione di amministratore non è stata concessa."),
+    ("fin_title", "Completamento dell'installazione di {app}"),
+    ("fin_body", "{app} è stato installato sul computer."),
+    ("fin_hint", "Fai clic su Fine per uscire."),
+    ("fin_launch", "Avvia {app}"),
+    ("exit_title", "Esci dall'installazione"),
+    ("exit_body", "L'installazione non è completa. Se esci ora, il programma non verrà installato."),
+    ("exit_q", "Uscire dall'installazione?"),
+    ("un_title", "Disinstalla {app}"),
+    ("un_sub", "Rimuovi l'applicazione dal computer."),
+    ("un_confirm", "Vuoi davvero rimuovere completamente {app} e tutti i suoi componenti?"),
+    ("un_location", "Percorso di installazione"),
+    ("un_counts", "{files} file, {shortcuts} collegamenti"),
+    ("un_working", "Rimozione di {app}..."),
+    ("un_done_title", "Disinstallazione completata"),
+    ("un_done_sub", "{app} è stato rimosso."),
+    ("un_done_body", "{app} è stato rimosso dal computer."),
+    ("un_leftovers", "I file creati dopo l'installazione potrebbero restare nella cartella di installazione."),
+    ("un_failed", "Impossibile completare la disinstallazione"),
+    ("un_missing_title", "Impossibile disinstallare"),
+    ("un_missing_sub", "Mancano le informazioni di disinstallazione."),
+    ("un_missing_body", "Informazioni di disinstallazione non trovate in:"),
+    ("un_missing_hint", "L'applicazione potrebbe essere già stata rimossa."),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_language_has_every_key() {
+        let en: Vec<&str> = EN.iter().map(|(k, _)| *k).collect();
+        for (code, _) in BUILTIN {
+            let t = table(code).unwrap();
+            for k in &en {
+                assert!(t.iter().any(|(kk, _)| kk == k), "{code} is missing {k}");
+            }
+            assert_eq!(t.len(), en.len(), "{code} has extra or duplicate keys");
+        }
+    }
+
+    #[test]
+    fn placeholders_and_matching() {
+        let l = Lang::from_pack(&builtin("ro").unwrap());
+        assert_eq!(l.fmt("fin_launch", &[("app", "Atelier")]), "Pornește Atelier");
+        let packs: Vec<Pack> = ["en", "ro", "de"].iter().filter_map(|c| builtin(c)).collect();
+        assert_eq!(best_match(&packs, "ro-RO"), 1);
+        assert_eq!(best_match(&packs, "ja"), 0);
+    }
+}

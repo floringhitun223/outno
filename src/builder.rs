@@ -1,12 +1,14 @@
 //! The compiler: pick an app folder + options, produce a self-contained setup.exe.
 
-use crate::payload::{self, Manifest, MAGIC};
+use crate::lang::{self, Pack};
+use crate::payload::{self, InstallMode, Manifest, MAGIC};
+use crate::{rtf, win};
 use crate::taskbar::{self, Taskbar};
 use crate::{platform, ui};
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Stroke};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -34,6 +36,29 @@ pub struct Form {
     pub desktop: bool,
     pub start_menu: bool,
     pub launch: bool,
+    /// Optional command run on the finished setup; `$f` is replaced by its quoted path.
+    pub sign_command: String,
+    pub install_mode: InstallMode,
+    /// Built-in language codes offered by the setup.
+    pub languages: Vec<String>,
+    /// Paths of custom language pack JSON files.
+    pub custom_languages: Vec<String>,
+    pub wizard_image: String,
+    pub header_image: String,
+    pub accent: Option<[u8; 3]>,
+    pub setup_icon: IconSource,
+    pub icon_file: String,
+}
+
+/// Which icon the generated setup.exe (and its uninstaller) shows in Explorer.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Debug)]
+pub enum IconSource {
+    #[default]
+    Outno,
+    /// The main executable's own icon.
+    App,
+    /// A `.ico` file (`icon_file`).
+    Custom,
 }
 
 impl Default for Form {
@@ -52,6 +77,15 @@ impl Default for Form {
             desktop: true,
             start_menu: true,
             launch: true,
+            sign_command: String::new(),
+            install_mode: InstallMode::PerUser,
+            languages: vec!["en".into()],
+            custom_languages: Vec::new(),
+            wizard_image: String::new(),
+            header_image: String::new(),
+            accent: None,
+            setup_icon: IconSource::Outno,
+            icon_file: String::new(),
         }
     }
 }
@@ -80,8 +114,10 @@ impl Form {
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes = fs::read(path).map_err(|e| format!("Can't read {}: {e}", path.display()))?;
         let mut f: Form = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid project file: {e}"))?;
-        let base = path.parent().unwrap_or(Path::new("."));
-        for p in [&mut f.source_dir, &mut f.license_file, &mut f.out_dir] {
+        let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let base = abs.parent().unwrap_or(Path::new("."));
+        let paths = [&mut f.source_dir, &mut f.license_file, &mut f.out_dir, &mut f.wizard_image, &mut f.header_image, &mut f.icon_file];
+        for p in paths.into_iter().chain(f.custom_languages.iter_mut()) {
             if !p.trim().is_empty() && Path::new(p.trim()).is_relative() {
                 *p = base.join(p.trim()).display().to_string();
             }
@@ -106,6 +142,11 @@ struct Errors {
     install_folder: Option<String>,
     out_dir: Option<String>,
     out_name: Option<String>,
+    sign_command: Option<String>,
+    languages: Option<String>,
+    wizard_image: Option<String>,
+    header_image: Option<String>,
+    icon_file: Option<String>,
 }
 
 impl Errors {
@@ -119,6 +160,11 @@ impl Errors {
             ("Install folder", &self.install_folder),
             ("Output folder", &self.out_dir),
             ("Setup file name", &self.out_name),
+            ("Sign command", &self.sign_command),
+            ("Languages", &self.languages),
+            ("Wizard image", &self.wizard_image),
+            ("Header image", &self.header_image),
+            ("Setup icon", &self.icon_file),
         ]
         .iter()
         .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}: {v}")))
@@ -188,7 +234,67 @@ fn validate(f: &Form) -> Errors {
     };
 
     e.out_name = bad_name(&f.out_name);
+
+    let sign = f.sign_command.trim();
+    if !sign.is_empty() && !sign.contains("$f") {
+        e.sign_command = Some("Use $f where the setup's path goes".into());
+    }
+
+    if f.languages.is_empty() && f.custom_languages.is_empty() {
+        e.languages = Some("Pick at least one language".into());
+    } else if let Some(err) = f.custom_languages.iter().find_map(|p| load_pack(Path::new(p)).err()) {
+        e.languages = Some(err);
+    }
+    e.wizard_image = check_file(&f.wizard_image, &["png"]);
+    e.header_image = check_file(&f.header_image, &["png"]);
+    if f.setup_icon == IconSource::Custom {
+        e.icon_file = if f.icon_file.trim().is_empty() {
+            Some("Choose an .ico file".into())
+        } else {
+            check_file(&f.icon_file, &["ico"])
+        };
+    }
     e
+}
+
+/// Optional file: fine when empty, else must exist with one of `exts`.
+fn check_file(path: &str, exts: &[&str]) -> Option<String> {
+    let p = Path::new(path.trim());
+    if path.trim().is_empty() {
+        None
+    } else if !p.is_file() {
+        Some("File not found".into())
+    } else if !p.extension().is_some_and(|x| exts.iter().any(|e| x.eq_ignore_ascii_case(e))) {
+        Some(format!("Must be a .{} file", exts.join(" / .")))
+    } else {
+        None
+    }
+}
+
+/// Read a custom language pack (JSON with code, name and strings).
+pub fn load_pack(path: &Path) -> Result<Pack, String> {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let bytes = fs::read(path).map_err(|e| format!("{name}: {e}"))?;
+    let p: Pack = serde_json::from_slice(&bytes).map_err(|e| format!("{name}: invalid language file ({e})"))?;
+    if p.code.trim().is_empty() || p.name.trim().is_empty() {
+        return Err(format!("{name}: \"code\" and \"name\" are required"));
+    }
+    Ok(p)
+}
+
+/// Languages in the order the setup offers them: built-ins first, then custom packs.
+fn collect_packs(f: &Form) -> Result<Vec<Pack>, String> {
+    let mut packs: Vec<Pack> = lang::BUILTIN
+        .iter()
+        .filter(|(c, _)| f.languages.iter().any(|l| l == c))
+        .filter_map(|(c, _)| lang::builtin(c))
+        .collect();
+    for p in &f.custom_languages {
+        let pack = load_pack(Path::new(p))?;
+        packs.retain(|b| b.code != pack.code); // a custom pack overrides a built-in one
+        packs.push(pack);
+    }
+    Ok(packs)
 }
 
 // ───────────────────────────── Folder scan ─────────────────────────────
@@ -339,6 +445,14 @@ fn field(
     }
 }
 
+fn mode_label(m: InstallMode) -> &'static str {
+    match m {
+        InstallMode::PerUser => "Current user (no admin rights)",
+        InstallMode::AllUsers => "All users (asks for admin rights)",
+        InstallMode::Ask => "Let the user choose",
+    }
+}
+
 fn grid(id: &str) -> egui::Grid {
     egui::Grid::new(id).num_columns(2).min_col_width(150.0).spacing([12.0, 8.0])
 }
@@ -399,7 +513,7 @@ impl eframe::App for Builder {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.add_space(4.0);
-                        ui.label(ui::bold(ui::BRAND, 20.0).color(ui::ACCENT));
+                        ui.label(ui::bold(ui::BRAND, 20.0).color(ui::accent()));
                         ui.label(ui::muted(ui::TAGLINE).size(12.5));
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -521,13 +635,13 @@ impl eframe::App for Builder {
                 .show(ctx, |ui| {
                     let r = ctx.screen_rect();
                     ui.painter().rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(10, 100, 214, 40));
-                    ui.painter().rect_stroke(r.shrink(10.0), 12.0, Stroke::new(2.0_f32, ui::ACCENT));
+                    ui.painter().rect_stroke(r.shrink(10.0), 12.0, Stroke::new(2.0_f32, ui::accent()));
                     ui.painter().text(
                         r.center(),
                         egui::Align2::CENTER_CENTER,
                         "Drop an app folder, a .outno project or a license file",
                         egui::FontId::proportional(18.0),
-                        ui::ACCENT_PRESS,
+                        ui::accent_press(),
                     );
                 });
         }
@@ -546,6 +660,7 @@ impl eframe::App for Builder {
 
 impl Builder {
     fn form_ui(&mut self, ui: &mut egui::Ui, e: &Errors, show: &dyn Fn(&Option<String>, &str) -> Option<String>) {
+        let mut notice: Option<(String, bool)> = None;
         let f = &mut self.f;
 
         ui::card(ui, "Application", "Shown in the setup wizard and in Installed apps.", |ui| {
@@ -628,12 +743,12 @@ impl Builder {
 
                 let err = show(&e.license_file, &f.license_file);
                 let has_lic = !f.license_file.is_empty();
-                field(ui, "License file", "Optional .txt shown before installing", &mut f.license_file, err.as_ref(), |ui| {
+                field(ui, "License file", "Optional .txt or .rtf shown before installing", &mut f.license_file, err.as_ref(), |ui| {
                     if has_lic && ui.button("Clear").on_hover_text("Remove the license file").clicked() {
                         clear_lic = true;
                     }
                     if ui.button("Browse...").clicked() {
-                        if let Some(p) = rfd::FileDialog::new().add_filter("Text", &["txt", "md"]).pick_file() {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("License", &["txt", "rtf", "md"]).pick_file() {
                             set_lic = Some(p.display().to_string());
                         }
                     }
@@ -655,8 +770,23 @@ impl Builder {
                 let hint = if f.app_name.trim().is_empty() { "Defaults to the application name".to_string() } else { f.app_name.trim().to_string() };
                 let err = show(&e.install_folder, &f.install_folder);
                 field(ui, "Install folder name", &hint, &mut f.install_folder, err.as_ref(), |_| {});
+                ui.label("Install for");
+                egui::ComboBox::from_id_salt("mode")
+                    .width(300.0)
+                    .selected_text(mode_label(f.install_mode))
+                    .show_ui(ui, |ui| {
+                        for m in [InstallMode::PerUser, InstallMode::AllUsers, InstallMode::Ask] {
+                            ui.selectable_value(&mut f.install_mode, m, mode_label(m));
+                        }
+                    });
+                ui.end_row();
                 ui.label("");
-                ui.label(ui::muted("Installed per user to %LOCALAPPDATA%\\Programs\\<folder>, no admin rights needed.").size(12.0));
+                let note = match f.install_mode {
+                    InstallMode::PerUser => "%LOCALAPPDATA%\\Programs\\<folder>, no admin rights needed.",
+                    InstallMode::AllUsers => "%ProgramFiles%\\<folder>; setup asks for admin rights (UAC).",
+                    InstallMode::Ask => "The user chooses on the destination page; admin rights only for all users.",
+                };
+                ui.label(ui::muted(note).size(12.0));
                 ui.end_row();
             });
             ui.add_space(6.0);
@@ -664,6 +794,117 @@ impl Builder {
             ui.checkbox(&mut f.start_menu, "Start Menu shortcut — ticked by default");
             ui.checkbox(&mut f.launch, "Offer to launch the app when setup finishes");
         });
+        ui.add_space(12.0);
+
+        // ── Languages ──
+        let (mut add_lang, mut export_tpl, mut remove_lang) = (false, false, None::<usize>);
+        ui::card(ui, "Languages", "The setup asks which one to use when more than one is selected.", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (code, name) in lang::BUILTIN {
+                    let mut on = f.languages.iter().any(|l| l == code);
+                    if ui.checkbox(&mut on, *name).changed() {
+                        if on {
+                            f.languages.push(code.to_string());
+                        } else {
+                            f.languages.retain(|l| l != code);
+                        }
+                    }
+                }
+            });
+            for (i, path) in f.custom_languages.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let label = match load_pack(Path::new(path)) {
+                        Ok(p) => RichText::new(format!("{} ({}) — {}", p.name, p.code, path)),
+                        Err(e) => RichText::new(e).color(ui::ERROR),
+                    };
+                    if ui.small_button("Remove").clicked() {
+                        remove_lang = Some(i);
+                    }
+                    ui.label(label.size(12.5));
+                });
+            }
+            if let Some(err) = show(&e.languages, "x") {
+                ui.label(RichText::new(err).color(ui::ERROR).size(12.0));
+            }
+            ui.horizontal(|ui| {
+                add_lang = ui.button("Add language file...").on_hover_text("A JSON pack made from the template").clicked();
+                export_tpl = ui.button("Export template...").on_hover_text("English strings to translate").clicked();
+            });
+        });
+        if let Some(i) = remove_lang {
+            f.custom_languages.remove(i);
+        }
+        if add_lang {
+            if let Some(p) = rfd::FileDialog::new().add_filter("Language pack", &["json"]).pick_file() {
+                f.custom_languages.push(p.display().to_string());
+            }
+        }
+        if export_tpl {
+            if let Some(p) = rfd::FileDialog::new().add_filter("Language pack", &["json"]).set_file_name("outno-language.json").save_file() {
+                let res = fs::write(&p, lang::template_json());
+                notice = Some(match res {
+                    Ok(()) => (format!("Template saved to {}", p.display()), true),
+                    Err(e) => (format!("Can't save template: {e}"), false),
+                });
+            }
+        }
+        ui.add_space(12.0);
+
+        // ── Appearance ──
+        let (mut pick_wizard, mut pick_header, mut pick_ico) = (false, false, false);
+        ui::card(ui, "Appearance", "Wizard images, accent colour and the icon of the setup file.", |ui| {
+            grid("look").show(ui, |ui| {
+                let err = show(&e.wizard_image, &f.wizard_image);
+                field(ui, "Wizard image", "Optional PNG for the side banner (about 164 × 314)", &mut f.wizard_image, err.as_ref(), |ui| {
+                    pick_wizard = ui.button("Browse...").clicked();
+                });
+                let err = show(&e.header_image, &f.header_image);
+                field(ui, "Header image", "Optional small PNG for the page header (about 48 × 48)", &mut f.header_image, err.as_ref(), |ui| {
+                    pick_header = ui.button("Browse...").clicked();
+                });
+
+                ui.label("Accent colour");
+                ui.horizontal(|ui| {
+                    let mut custom = f.accent.is_some();
+                    if ui.checkbox(&mut custom, "Custom").changed() {
+                        f.accent = custom.then_some(ui::DEFAULT_ACCENT);
+                    }
+                    if let Some(rgb) = &mut f.accent {
+                        ui.color_edit_button_srgb(rgb);
+                        ui.label(ui::muted(format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])).size(12.5));
+                    } else {
+                        ui.label(ui::muted("OUTNO blue").size(12.5));
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Setup icon");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut f.setup_icon, IconSource::Outno, "OUTNO");
+                    ui.radio_value(&mut f.setup_icon, IconSource::App, "App's icon");
+                    ui.radio_value(&mut f.setup_icon, IconSource::Custom, "Custom .ico");
+                });
+                ui.end_row();
+                if f.setup_icon == IconSource::Custom {
+                    let err = show(&e.icon_file, &f.icon_file);
+                    field(ui, "Icon file", "An .ico file", &mut f.icon_file, err.as_ref(), |ui| {
+                        pick_ico = ui.button("Browse...").clicked();
+                    });
+                }
+            });
+        });
+        let pick = |pick: bool, filter: &str, exts: &[&str]| {
+            if pick { rfd::FileDialog::new().add_filter(filter, exts).pick_file().map(|p| p.display().to_string()) } else { None }
+        };
+        if let Some(p) = pick(pick_wizard, "PNG image", &["png"]) {
+            f.wizard_image = p;
+        }
+        if let Some(p) = pick(pick_header, "PNG image", &["png"]) {
+            f.header_image = p;
+        }
+        if let Some(p) = pick(pick_ico, "Icon", &["ico"]) {
+            f.icon_file = p;
+        }
         ui.add_space(12.0);
 
         ui::card(ui, "Output", "Where the finished setup executable is written.", |ui| {
@@ -679,6 +920,14 @@ impl Builder {
                 let hint = f.default_out_name();
                 let err = show(&e.out_name, &f.out_name);
                 field(ui, "Setup file name", &hint, &mut f.out_name, err.as_ref(), |_| {});
+                let err = show(&e.sign_command, &f.sign_command);
+                field(ui, "Sign command", "Optional, e.g. signtool sign /fd sha256 /a $f", &mut f.sign_command, err.as_ref(), |_| {});
+                ui.label("");
+                ui.label(
+                    ui::muted("Runs after each build; $f is the setup's path. Saved in the project, so avoid passwords here.")
+                        .size(12.0),
+                );
+                ui.end_row();
             });
         });
         if let Some(s) = set_out {
@@ -687,6 +936,9 @@ impl Builder {
 
         if let Some(src) = picked_src {
             self.set_source(src);
+        }
+        if notice.is_some() {
+            self.notice = notice;
         }
     }
 
@@ -911,18 +1163,49 @@ pub fn build_cli(project: &Path) -> Result<PathBuf, String> {
     build_installer(&f, &mut report).map(|(p, _)| p).map_err(|e| e.to_string())
 }
 
+/// Temp files of one build, removed when the build ends (success or not).
+struct TempFiles(Vec<PathBuf>);
+
+impl Drop for TempFiles {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            if p.is_dir() {
+                let _ = fs::remove_dir_all(p);
+            } else {
+                let _ = fs::remove_file(p);
+            }
+        }
+    }
+}
+
 fn build_installer(f: &Form, report: &mut dyn FnMut(Msg)) -> Result<(PathBuf, u64), Box<dyn std::error::Error>> {
     let errs = validate(f).all();
     if !errs.is_empty() {
         return Err(errs.join("; ").into());
     }
     let src = PathBuf::from(f.source_dir.trim());
+    let pid = std::process::id();
+    let tmp_dir = std::env::temp_dir();
+    let mut temps = TempFiles(Vec::new());
 
+    // License: plain text, or RTF converted to text.
     let license_text = if f.license_file.trim().is_empty() {
         String::new()
     } else {
-        String::from_utf8_lossy(&fs::read(f.license_file.trim())?).to_string()
+        let bytes = fs::read(f.license_file.trim())?;
+        if rtf::is_rtf(&bytes) {
+            report(Msg::Log("Converting RTF license to text".into()));
+            rtf::to_text(&String::from_utf8_lossy(&bytes))
+        } else {
+            String::from_utf8_lossy(&bytes).to_string()
+        }
     };
+
+    let languages = collect_packs(f)?;
+    report(Msg::Log(format!(
+        "Languages: {}",
+        languages.iter().map(|p| p.code.as_str()).collect::<Vec<_>>().join(", ")
+    )));
 
     let manifest = Manifest {
         app_name: f.app_name.trim().into(),
@@ -935,16 +1218,50 @@ fn build_installer(f: &Form, report: &mut dyn FnMut(Msg)) -> Result<(PathBuf, u6
         desktop_icon: f.desktop,
         start_menu: f.start_menu,
         launch_after: f.launch,
+        install_mode: f.install_mode,
+        languages,
+        accent: f.accent,
     };
 
-    // 1. The stub = this very exe (minus any payload it might carry).
+    // 1. The stub = this very exe, minus any payload or code signature it carries.
     let me = std::env::current_exe()?;
-    let stub_len = match payload::read_payload(&me) {
-        Some(p) => p.zip_start,
-        None => fs::metadata(&me)?.len(),
+    let stub = tmp_dir.join(format!("outno-stub-{pid}.exe"));
+    temps.0.push(stub.clone());
+    payload::write_stub(&me, &mut io::BufWriter::new(File::create(&stub)?))?;
+
+    // 2. Setup icon (Windows only; a failure just keeps the OUTNO icon).
+    let icon = match f.setup_icon {
+        IconSource::Outno => None,
+        IconSource::App => Some(win::extract_icon(&src.join(f.main_exe.trim())).ok_or("the main executable has no icon")),
+        IconSource::Custom => {
+            Some(fs::read(f.icon_file.trim()).ok().and_then(|b| win::IconSet::from_ico(&b)).ok_or("the .ico file can't be read"))
+        }
+    };
+    match icon {
+        Some(Ok(set)) => match win::replace_icon(&stub, &set) {
+            Ok(()) => report(Msg::Log("Setup icon replaced".into())),
+            Err(e) => report(Msg::Log(format!("Warning: keeping the OUTNO icon ({e})"))),
+        },
+        Some(Err(e)) => report(Msg::Log(format!("Warning: keeping the OUTNO icon ({e})"))),
+        None => {}
+    }
+
+    // 3. With a sign command, sign a copy of the stub as the uninstaller too.
+    let sign = f.sign_command.trim();
+    let signed_unins = if sign.is_empty() {
+        None
+    } else {
+        let dir = tmp_dir.join(format!("outno-unins-{pid}"));
+        temps.0.push(dir.clone());
+        fs::create_dir_all(&dir)?;
+        let unins = dir.join("unins000.exe");
+        fs::copy(&stub, &unins)?;
+        report(Msg::Log("Signing the uninstaller".into()));
+        run_sign(sign, &unins, report)?;
+        Some(unins)
     };
 
-    // 2. Compress the app folder into a temp zip (skipping the output folder if it lives inside).
+    // 4. Compress the app folder (+ setup assets) into a temp zip.
     let out_dir = PathBuf::from(f.out_dir.trim());
     fs::create_dir_all(&out_dir)?;
     let out_dir_c = fs::canonicalize(&out_dir).unwrap_or(out_dir.clone());
@@ -960,10 +1277,22 @@ fn build_installer(f: &Form, report: &mut dyn FnMut(Msg)) -> Result<(PathBuf, u6
     let total = entries.iter().filter(|e| e.file_type().is_file()).count();
     report(Msg::Total(total));
 
-    let tmp = std::env::temp_dir().join(format!("outno-{}.tmp", std::process::id()));
-    let result = (|| -> Result<usize, Box<dyn std::error::Error>> {
+    let mut assets: Vec<(&str, PathBuf)> = Vec::new();
+    if !f.wizard_image.trim().is_empty() {
+        assets.push((payload::ASSET_WIZARD_IMAGE, PathBuf::from(f.wizard_image.trim())));
+    }
+    if !f.header_image.trim().is_empty() {
+        assets.push((payload::ASSET_HEADER_IMAGE, PathBuf::from(f.header_image.trim())));
+    }
+    if let Some(u) = &signed_unins {
+        assets.push((payload::ASSET_UNINSTALLER, u.clone()));
+    }
+
+    let zip_path = tmp_dir.join(format!("outno-{pid}.zip"));
+    temps.0.push(zip_path.clone());
+    let count = {
         let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).large_file(true);
-        let mut zw = ZipWriter::new(File::create(&tmp)?);
+        let mut zw = ZipWriter::new(File::create(&zip_path)?);
         let mut count = 0usize;
         for entry in &entries {
             let rel = entry.path().strip_prefix(&src)?;
@@ -981,25 +1310,23 @@ fn build_installer(f: &Form, report: &mut dyn FnMut(Msg)) -> Result<(PathBuf, u6
                 report(Msg::Progress(count));
             }
         }
-        zw.finish()?;
-        Ok(count)
-    })();
-    let count = match result {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = fs::remove_file(&tmp);
-            return Err(e);
+        for (name, path) in &assets {
+            report(Msg::Log(format!("Adding setup resource {}", name.trim_start_matches(payload::ASSET_PREFIX))));
+            zw.start_file(*name, opts)?;
+            io::copy(&mut File::open(path)?, &mut zw)?;
         }
+        zw.finish()?;
+        count
     };
-    let zip_len = fs::metadata(&tmp)?.len();
+    let zip_len = fs::metadata(&zip_path)?.len();
 
-    // 3. stub + zip + manifest + trailer
+    // 5. stub + zip + manifest + trailer
     report(Msg::Log("Writing setup executable...".into()));
     let write = || -> Result<(), Box<dyn std::error::Error>> {
         let man = serde_json::to_vec(&manifest)?;
         let mut out = io::BufWriter::new(File::create(&out_path)?);
-        io::copy(&mut File::open(&me)?.take(stub_len), &mut out)?;
-        io::copy(&mut File::open(&tmp)?, &mut out)?;
+        io::copy(&mut File::open(&stub)?, &mut out)?;
+        io::copy(&mut File::open(&zip_path)?, &mut out)?;
         out.write_all(&man)?;
         out.write_all(&zip_len.to_le_bytes())?;
         out.write_all(&(man.len() as u64).to_le_bytes())?;
@@ -1007,14 +1334,57 @@ fn build_installer(f: &Form, report: &mut dyn FnMut(Msg)) -> Result<(PathBuf, u6
         out.flush()?;
         Ok(())
     };
-    let res = write();
-    let _ = fs::remove_file(&tmp);
-    if let Err(e) = res {
+    if let Err(e) = write() {
         let _ = fs::remove_file(&out_path);
         return Err(format!("Can't write {}: {e}", out_path.display()).into());
+    }
+
+    // 6. Optional code signing, then make sure the signed file still opens as a setup.
+    if !sign.is_empty() {
+        report(Msg::Log("Signing the setup".into()));
+        run_sign(sign, &out_path, report)?;
+        if payload::read_payload(&out_path).is_none() {
+            return Err("The signed setup can no longer be read. The sign command must only add a signature.".into());
+        }
+        report(Msg::Log("Signed setup verified.".into()));
     }
 
     let size = fs::metadata(&out_path)?.len();
     report(Msg::Log(format!("Done. {count} files, {} -> {}", ui::fmt_size(size), out_path.display())));
     Ok((out_path, size))
+}
+
+/// Run the user's sign command through the shell, streaming its output into the log.
+fn run_sign(template: &str, file: &Path, report: &mut dyn FnMut(Msg)) -> Result<(), String> {
+    let cmd = template.replace("$f", &format!("\"{}\"", file.display()));
+    report(Msg::Log(format!("Signing: {cmd}")));
+
+    #[cfg(windows)]
+    let mut c = {
+        use std::os::windows::process::CommandExt;
+        let mut c = std::process::Command::new("cmd");
+        c.raw_arg(format!("/D /S /C \"{cmd}\"")).creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        c
+    };
+    #[cfg(not(windows))]
+    let mut c = {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(&cmd);
+        c
+    };
+
+    let out = c.output().map_err(|e| format!("Can't run the sign command: {e}"))?;
+    for line in String::from_utf8_lossy(&out.stdout).lines().chain(String::from_utf8_lossy(&out.stderr).lines()) {
+        if !line.trim().is_empty() {
+            report(Msg::Log(format!("  {line}")));
+        }
+    }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Sign command failed (exit code {}). See the build log.",
+            out.status.code().map_or("?".into(), |c| c.to_string())
+        ))
+    }
 }
