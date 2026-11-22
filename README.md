@@ -9,11 +9,11 @@
 Create self-contained Windows setup executables from your application files, with a familiar installation wizard and an accompanying uninstaller.
 
 [![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)](https://www.microsoft.com/windows)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)]([https://www.microsoft.com/windows](https://github.com/floringhitun223/outno/releases))
 [![Status](https://img.shields.io/badge/Status-Early%20development-orange)](#project-status)
 [![License](https://img.shields.io/badge/License-TBD-lightgrey)](#license)
 
-**[Releases](https://github.com/OWNER/REPOSITORY/releases) · [Report a bug](https://github.com/OWNER/REPOSITORY/issues) · [Request a feature](https://github.com/OWNER/REPOSITORY/issues)**
+**[Releases](https://github.com/floringhitun223/outno/releases) · [Report a bug](https://github.com/floringhitun223/outno/issues) · [Request a feature]([https://github.com/OWNER/REPOSITORY/issues](https://github.com/floringhitun223/outno/issues))**
 
 </div>
 
