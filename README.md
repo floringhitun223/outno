@@ -1,31 +1,32 @@
-<div align="center">
-  <img src="assets/outno-icon.png" alt="OUTNO" width="180">
-</div>
-
+::: {align="center"}
 # OUTNO
 
-### Build. Package. Install.
+`<img src="assets/outno-icon.png" alt="OUTNO application icon" width="150">`{=html}
 
-**A Rust-powered Windows application installer builder.**
+### Windows Installer Builder
+
+**Build. Package. Install.**
 
 Create self-contained Windows setup executables from your application
-files, with a familiar installation wizard and an accompanying
+files, complete with a familiar installation wizard and an accompanying
 uninstaller.
 
-[![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
+[![Built with
+Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)](https://www.microsoft.com/windows)
 [![Status](https://img.shields.io/badge/Status-Early%20development-orange)](#project-status)
 [![License:
 MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**[Releases](https://github.com/floringhitun223/outno/releases) ·
-[Report a bug](https://github.com/floringhitun223/outno/issues) ·
-[Request a feature](https://github.com/floringhitun223/outno/issues)**
+**[Download latest
+release](https://github.com/floringhitun223/outno/releases) · [View all
+releases](https://github.com/floringhitun223/outno/releases) · [Report
+an issue](https://github.com/floringhitun223/outno/issues)**
 :::
 
 ------------------------------------------------------------------------
 
-## Overview
+## About OUTNO
 
 OUTNO is a Windows installer creation tool written in Rust. It takes an
 application directory and packages its files into a standalone setup
@@ -69,19 +70,19 @@ ideas that are not yet implemented.
 
 OUTNO currently uses three operating modes:
 
-  -----------------------------------------------------------------------
-  Mode                                Purpose
-  ----------------------------------- -----------------------------------
-  **Compiler**                        Select the application folder and
-                                      configure the installer.
+  ---------------------------------------------------------------------
+  Mode                               Purpose
+  ---------------------------------- ----------------------------------
+  **Compiler**                       Select the application folder and
+                                     configure the installer.
 
-  **Installer**                       Run the generated setup executable
-                                      and install the packaged
-                                      application.
+  **Installer**                      Run the generated setup executable
+                                     and install the packaged
+                                     application.
 
-  **Uninstaller**                     Confirm and remove an installed
-                                      application.
-  -----------------------------------------------------------------------
+  **Uninstaller**                    Confirm and remove an installed
+                                     application.
+  ---------------------------------------------------------------------
 
 The generated setup file uses an appended-payload format:
 
@@ -209,6 +210,4 @@ OUTNO is licensed under the [MIT License](LICENSE).
 
 ------------------------------------------------------------------------
 
-
-**OUTNO** · Build. Package. Install.
-:::
+**OUTNO** · Build. Package. Install. :::
