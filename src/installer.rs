@@ -84,7 +84,8 @@ fn merge(into: &mut Vec<String>, old: Vec<String>) {
 }
 
 /// Extract the app, write the uninstaller, shortcuts and registry entry.
-fn do_install(payload: &Payload, job: &Job, lang: &Lang, progress: &mut dyn FnMut(&Status)) -> Result<(), String> {
+/// `Ok(Some(warning))`: installed, but the Installed apps entry couldn't be written.
+fn do_install(payload: &Payload, job: &Job, lang: &Lang, progress: &mut dyn FnMut(&Status)) -> Result<Option<String>, String> {
     let m = &payload.manifest;
     let app = m.app_name.as_str();
     let dir = job.dir.as_path();
@@ -177,10 +178,12 @@ fn do_install(payload: &Payload, job: &Job, lang: &Lang, progress: &mut dyn FnMu
     let json = serde_json::to_vec_pretty(&log).map_err(|e| e.to_string())?;
     fs::write(&log_path, json).map_err(|e| ioe(&log_path, &e))?;
 
+    // The app is fully installed at this point: a registry problem is only a warning.
     let size_kb = (bytes / 1024).min(u32::MAX as u64) as u32;
-    platform::register_uninstall(m, dir, &unins, job.all_users, size_kb)
-        .map_err(|e| lang.fmt("err_generic", &[("path", "Registry"), ("error", &e)]))?;
-    Ok(())
+    let warning = platform::register_uninstall(m, dir, &unins, job.all_users, size_kb)
+        .err()
+        .map(|e| lang.fmt("warn_registry", &[("app", app), ("error", &e)]));
+    Ok(warning)
 }
 
 /// Elevated helper:  setup.exe --elevated-install <job.json>
@@ -205,7 +208,12 @@ pub fn run_elevated_job(payload: Payload, job_path: &Path) -> i32 {
         }
     });
     match res {
-        Ok(()) => 0,
+        Ok(warning) => {
+            if let Some(w) = warning {
+                let _ = fs::write(job_path.with_extension("warning"), w);
+            }
+            0
+        }
         Err(e) => {
             let _ = fs::write(job_path.with_extension("error"), e);
             1
@@ -234,6 +242,8 @@ struct Progress {
     waiting_admin: bool,
     finished: bool,
     error: Option<String>,
+    /// Installed, but with a non-fatal problem (shown on the Finish page).
+    warning: Option<String>,
 }
 
 pub fn run(payload: Payload) -> eframe::Result<()> {
@@ -429,7 +439,10 @@ impl Wizard {
             thread::spawn(move || {
                 let res = install_elevated(&job, &lang, &prog, &ctx);
                 let mut p = prog.lock().unwrap();
-                p.error = res.err();
+                match res {
+                    Ok(w) => p.warning = w,
+                    Err(e) => p.error = Some(e),
+                }
                 p.finished = true;
                 ctx.request_repaint();
             });
@@ -442,7 +455,10 @@ impl Wizard {
                     ctx.request_repaint();
                 });
                 let mut p = prog.lock().unwrap();
-                p.error = res.err();
+                match res {
+                    Ok(w) => p.warning = w,
+                    Err(e) => p.error = Some(e),
+                }
                 p.finished = true;
                 ctx.request_repaint();
             });
@@ -498,12 +514,13 @@ impl Wizard {
 }
 
 /// Run the install in an elevated copy of this setup and relay its progress.
-fn install_elevated(job: &Job, lang: &Lang, prog: &Arc<Mutex<Progress>>, ctx: &egui::Context) -> Result<(), String> {
+fn install_elevated(job: &Job, lang: &Lang, prog: &Arc<Mutex<Progress>>, ctx: &egui::Context) -> Result<Option<String>, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let job_path = std::env::temp_dir().join(format!("outno-job-{}-{stamp}.json", std::process::id()));
     let status_path = job_path.with_extension("status");
     let error_path = job_path.with_extension("error");
+    let warning_path = job_path.with_extension("warning");
     fs::write(&job_path, serde_json::to_vec(job).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
 
     // Poll the helper's status file while we wait for it.
@@ -529,14 +546,14 @@ fn install_elevated(job: &Job, lang: &Lang, prog: &Arc<Mutex<Progress>>, ctx: &e
     let _ = poller.join();
 
     let out = match res {
-        win::Elevated::Exited(0) => Ok(()),
+        win::Elevated::Exited(0) => Ok(fs::read_to_string(&warning_path).ok()),
         win::Elevated::Exited(code) => {
             Err(fs::read_to_string(&error_path).unwrap_or_else(|_| format!("Setup helper failed (exit code {code}).")))
         }
         win::Elevated::Cancelled => Err(lang.get("err_no_admin")),
         win::Elevated::Failed(e) => Err(format!("{}\n{e}", lang.get("err_no_admin"))),
     };
-    for p in [&job_path, &status_path, &error_path, &job_path.with_extension("status.tmp")] {
+    for p in [&job_path, &status_path, &error_path, &warning_path, &job_path.with_extension("status.tmp")] {
         let _ = fs::remove_file(p);
     }
     out
@@ -548,9 +565,9 @@ impl eframe::App for Wizard {
         // Dialog opened this frame must not react to the same key press.
         let dialog_open = self.confirm_cancel;
 
-        let (install_error, finished) = {
+        let (install_error, finished, warning) = {
             let p = self.progress.lock().unwrap();
-            (p.error.clone(), p.finished)
+            (p.error.clone(), p.finished, p.warning.clone())
         };
         if self.page == Page::Installing {
             if finished && install_error.is_none() {
@@ -807,6 +824,10 @@ impl eframe::App for Wizard {
                     Self::body(ui, self.t("fin_body"));
                     ui.add_space(6.0);
                     Self::body(ui, self.t("fin_hint"));
+                    if let Some(w) = &warning {
+                        ui.add_space(10.0);
+                        ui.add(egui::Label::new(RichText::new(w).size(12.5).color(ui::WARNING)).wrap());
+                    }
                     if m.launch_after {
                         ui.add_space(18.0);
                         let label = self.t("fin_launch");

@@ -131,9 +131,15 @@ fn hive(all_users: bool) -> winreg::RegKey {
 
 #[cfg(windows)]
 pub fn register_uninstall(m: &Manifest, dir: &Path, uninstaller: &Path, all_users: bool, size_kb: u32) -> Result<(), String> {
+    use winreg::enums::{KEY_READ, KEY_WRITE};
     let path = format!(r"{UNINSTALL_KEY}\{}", registry_key_name(m));
-    let (key, _) = hive(all_users).create_subkey(path).map_err(|e| e.to_string())?;
-    let e = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
+    let where_ = format!(r"{}\{path}", if all_users { "HKLM" } else { "HKCU" });
+    // Read/write only: create_subkey() asks for KEY_ALL_ACCESS (incl. WRITE_DAC/WRITE_OWNER),
+    // which is denied on an existing key created by an elevated process.
+    let (key, _) = hive(all_users)
+        .create_subkey_with_flags(&path, KEY_READ | KEY_WRITE)
+        .map_err(|e| format!("{where_}: {e}"))?;
+    let e = |r: std::io::Result<()>| r.map_err(|e| format!("{where_}: {e}"));
     e(key.set_value("DisplayName", &m.app_name))?;
     e(key.set_value("DisplayVersion", &m.version))?;
     e(key.set_value("Publisher", &m.publisher))?;

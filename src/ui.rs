@@ -47,6 +47,7 @@ pub const BORDER: Color32 = Color32::from_rgb(218, 221, 227);
 pub const TEXT: Color32 = Color32::from_rgb(31, 35, 40);
 pub const MUTED: Color32 = Color32::from_rgb(95, 102, 114);
 pub const ERROR: Color32 = Color32::from_rgb(196, 43, 28);
+pub const WARNING: Color32 = Color32::from_rgb(157, 93, 0);
 pub const SUCCESS: Color32 = Color32::from_rgb(16, 124, 16);
 
 pub const BRAND: &str = "OUTNO";
