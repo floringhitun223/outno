@@ -1,30 +1,25 @@
-::: {align="center"}
-# OUTNO
+<div align="center">
+  <h1>OUTNO</h1>
+  <img src="assets/outno-icon.png" alt="OUTNO application icon" width="150">
+  <h3>Windows Installer Builder</h3>
+  <p><strong>Build. Package. Install.</strong></p>
+  <p>Create self-contained Windows setup executables from your application files, complete with a familiar installation wizard and an accompanying uninstaller.</p>
+  <p>
+    <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust" alt="Built with Rust"></a>
+    <a href="https://www.microsoft.com/windows"><img src="https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows" alt="Windows"></a>
+    <a href="#project-status"><img src="https://img.shields.io/badge/Status-Early%20development-orange" alt="Early development"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+  </p>
+  <p>
+    <strong>
+      <a href="https://github.com/floringhitun223/outno/releases">Download latest release</a>
+      · <a href="https://github.com/floringhitun223/outno/releases">All releases</a>
+      · <a href="https://github.com/floringhitun223/outno/issues">Report an issue</a>
+    </strong>
+  </p>
+</div>
 
-`<img src="assets/outno-icon.png" alt="OUTNO application icon" width="150">`{=html}
-
-### Windows Installer Builder
-
-**Build. Package. Install.**
-
-Create self-contained Windows setup executables from your application
-files, complete with a familiar installation wizard and an accompanying
-uninstaller.
-
-[![Built with
-Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)](https://www.microsoft.com/windows)
-[![Status](https://img.shields.io/badge/Status-Early%20development-orange)](#project-status)
-[![License:
-MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-**[Download latest
-release](https://github.com/floringhitun223/outno/releases) · [View all
-releases](https://github.com/floringhitun223/outno/releases) · [Report
-an issue](https://github.com/floringhitun223/outno/issues)**
-:::
-
-------------------------------------------------------------------------
+---
 
 ## About OUTNO
 
